@@ -1,3 +1,4 @@
+import re
 import os
 import time
 import math
@@ -16,6 +17,7 @@ from functools import partial
 from sklearn.utils import shuffle
 from sklearn.metrics import accuracy_score
 
+from model_py import Model
 from opt import adam, warmup_cosine, warmup_linear, warmup_constant
 from datasets import rocstories
 from analysis import rocstories as rocstories_analysis
@@ -51,45 +53,44 @@ class LossCompute:
 
         # Classification loss
         clf_losses = self.clf_criterion(clf_logits, Y)
-
         if lm_coef > 0:
             train_loss = clf_losses.sum() + lm_coef * lm_losses.sum())
         else:
             train_loss = clf_losses.sum()
         return train_loss
 
-def mgpu_train(*xs):
-    gpu_ops = []
-    gpu_grads = []
-    xs = (tf.split(x, n_gpu, 0) for x in xs)
-    for i, xs in enumerate(zip(*xs)):
-        do_reuse = True if i > 0 else None
-        with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=do_reuse):
-            clf_logits, clf_losses, lm_losses = model(*xs, train=True, reuse=do_reuse)
-            if lm_coef > 0:
-                train_loss = tf.reduce_mean(clf_losses) + lm_coef*tf.reduce_mean(lm_losses)
-            else:
-                train_loss = tf.reduce_mean(clf_losses)
-            params = find_trainable_variables("model")
-            grads = tf.gradients(train_loss, params)
-            grads = list(zip(grads, params))
-            gpu_grads.append(grads)
-            gpu_ops.append([clf_logits, clf_losses, lm_losses])
-    ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
-    grads = average_grads(gpu_grads)
-    grads = [g for g, p in grads]
-    train = opt_fns[opt](params, grads, lr, partial(lr_schedules[lr_schedule], warmup=lr_warmup), n_updates_total, l2=l2, max_grad_norm=max_grad_norm, vector_l2=vector_l2, b1=b1, b2=b2, e=e)
-    return [train]+ops
+# def mgpu_train(*xs):
+#     gpu_ops = []
+#     gpu_grads = []
+#     xs = (tf.split(x, n_gpu, 0) for x in xs)
+#     for i, xs in enumerate(zip(*xs)):
+#         do_reuse = True if i > 0 else None
+#         with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=do_reuse):
+#             clf_logits, clf_losses, lm_losses = model(*xs, train=True, reuse=do_reuse)
+#             if lm_coef > 0:
+#                 train_loss = tf.reduce_mean(clf_losses) + lm_coef*tf.reduce_mean(lm_losses)
+#             else:
+#                 train_loss = tf.reduce_mean(clf_losses)
+#             params = find_trainable_variables("model")
+#             grads = tf.gradients(train_loss, params)
+#             grads = list(zip(grads, params))
+#             gpu_grads.append(grads)
+#             gpu_ops.append([clf_logits, clf_losses, lm_losses])
+#     ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
+#     grads = average_grads(gpu_grads)
+#     grads = [g for g, p in grads]
+#     train = opt_fns[opt](params, grads, lr, partial(lr_schedules[lr_schedule], warmup=lr_warmup), n_updates_total, l2=l2, max_grad_norm=max_grad_norm, vector_l2=vector_l2, b1=b1, b2=b2, e=e)
+#     return [train]+ops
 
-def mgpu_predict(*xs):
-    gpu_ops = []
-    xs = (tf.split(x, n_gpu, 0) for x in xs)
-    for i, xs in enumerate(zip(*xs)):
-        with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=True):
-            clf_logits, clf_losses, lm_losses = model(*xs, train=False, reuse=True)
-            gpu_ops.append([clf_logits, clf_losses, lm_losses])
-    ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
-    return ops
+# def mgpu_predict(*xs):
+#     gpu_ops = []
+#     xs = (tf.split(x, n_gpu, 0) for x in xs)
+#     for i, xs in enumerate(zip(*xs)):
+#         with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=True):
+#             clf_logits, clf_losses, lm_losses = model(*xs, train=False, reuse=True)
+#             gpu_ops.append([clf_logits, clf_losses, lm_losses])
+#     ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
+#     return ops
 
 def transform_roc(X1, X2, X3):
     n_batch = len(X1)
@@ -247,6 +248,7 @@ if __name__ == '__main__':
                     +[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
                    )+3, n_ctx
                 )
+    vocab = n_vocab + n_special + n_ctx
     trX, trM = transform_roc(trX1, trX2, trX3)
     vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
     if submit:
@@ -257,22 +259,12 @@ if __name__ == '__main__':
     n_batch_train = n_batch*n_gpu
     n_updates_total = (n_train//n_batch_train)*n_iter
 
-    X_train = tf.placeholder(tf.int32, [n_batch_train, 2, n_ctx, 2])
-    M_train = tf.placeholder(tf.float32, [n_batch_train, 2, n_ctx])
-    X = tf.placeholder(tf.int32, [None, 2, n_ctx, 2])
-    M = tf.placeholder(tf.float32, [None, 2, n_ctx])
+    model = Model(vocab, cfg)
+    # TODO Initialize model
 
-    Y_train = tf.placeholder(tf.int32, [n_batch_train])
-    Y = tf.placeholder(tf.int32, [None])
-
-    train, logits, clf_losses, lm_losses = mgpu_train(X_train, M_train, Y_train)
-    clf_loss = tf.reduce_mean(clf_losses)
-
-    params = find_trainable_variables('model')
-    sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
-    sess.run(tf.global_variables_initializer())
-
+    # Load weights from TF model
     shapes = json.load(open('model/params_shapes.json'))
+    names = json.load(open('model/parameters_names.json'))
     offsets = np.cumsum([np.prod(shape) for shape in shapes])
     init_params = [np.load('model/params_{}.npy'.format(n)) for n in range(10)]
     init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
@@ -280,17 +272,26 @@ if __name__ == '__main__':
     init_params[0] = init_params[0][:n_ctx]
     init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, n_embd)*0.02).astype(np.float32), init_params[0]], 0)
     del init_params[1]
-
     if n_transfer == -1:
         n_transfer = 0
     else:
         n_transfer = 1+n_transfer*12
-    sess.run([p.assign(ip) for p, ip in zip(params[:n_transfer], init_params[:n_transfer])])
-
-    eval_mgpu_logits, eval_mgpu_clf_losses, eval_mgpu_lm_losses = mgpu_predict(X_train, M_train, Y_train)
-    eval_logits, eval_clf_losses, eval_lm_losses = model(X, M, Y, train=False, reuse=True)
-    eval_clf_loss = tf.reduce_mean(eval_clf_losses)
-    eval_mgpu_clf_loss = tf.reduce_mean(eval_mgpu_clf_losses)
+    assert model.embed.weight.shape == init_params[0].shape
+    model.embed.weight = init_params[0]
+    for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
+        name = name[6:] # skip "model/"
+        assert name[-2:] == ":0"
+        name = name[:-2]
+        name = name.split('/')
+        pointer = model
+        for m_name in name:
+            l = re.split('(\d+)', m_name)
+            pointer = getattr(pointer, l[0])
+            if len(l) == 1:
+                num = int(l[1])
+                pointer = pointer[num]
+        assert pointer.shape == ip.shape
+        pointer = ip
 
     n_updates = 0
     n_epochs = 0
