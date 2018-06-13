@@ -160,4 +160,19 @@ class Model(nn.Module):
         h = e.sum(dim=2)
         for block in self.blocks:
             h = block(h)
-        return h
+
+        # Language modeling logits
+        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embed) # Shape: 252, 768
+        lm_logits = self.decoder(h_trunc)
+
+        # Classification logits
+        clf_h = h.view(-1, self.n_embed)
+        pool_idx = torch.eq(X[:, :, 0].contiguous().view(-1), self.clf_token)
+        clf_h = clf_h[pool_idx, :]
+        clf_h = clf_h.view(-1, 2, self.n_embed, 1)
+        m = nn.Dropout2d(clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
+        clf_h = m(clf_h)
+        clf_h = clf_h.view(-1, self.n_embed)
+        clf_logits = self.linear(clf_h)
+
+        return lm_logits, clf_logits

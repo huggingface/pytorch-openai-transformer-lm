@@ -34,64 +34,29 @@ LR_SCHEDULES = {
 
 class LossCompute:
     "A Loss compute and train function."
-    def __init__(self, generator, lm_criterion, n_embed, opt=None):
+    def __init__(self, generator, lm_criterion, n_embed, clf_token, opt=None):
         self.generator = generator
         self.lm_criterion = lm_criterion
         self.opt = opt
         self.n_embed = n_embed
+        self.clf_token = clf_token
 
-    def __call__(self, X, Y, M, h, norm):
+    def __call__(self, X, Y, M, lm_logits, clf_logits, norm):
         # Language modeling loss
-        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embed) # Shape: 252, 768
         x_shifted = X[:, 1:, 0].contiguous().view(-1)           # Shape: 252
-        lm_logits = self.generator(h_trunc)
-        lm_losses = self.lm_criterion(h_trunc, x_shifted)
-        lm_losses = lm_losses.view(x.size(0), X.size(1))
+        lm_losses = self.lm_criterion(lm_logits, x_shifted)
+        lm_losses = lm_losses.view(X.size(0), X.size(1))
         lm_losses = lm_losses * M[:, 1:]
         lm_losses = lm_losses.sum(1) / torch.sum(M[:, 1:], 1)
 
         # Classification loss
-        clf_h = h.view(-1, self.n_embed)
+        clf_losses = self.clf_criterion(clf_logits, Y)
 
-        # loss.backward()
-        # if self.opt is not None:
-        #     self.opt.step()
-        #     self.opt.optimizer.zero_grad()
-        return lm_losses
-
-def model(X, M, Y, train=False, reuse=False):
-    we = tf.get_variable("we", [n_vocab+n_special+n_ctx, n_embd], 
-                         initializer=tf.random_normal_initializer(stddev=0.02))
-    we = dropout(we, embd_pdrop, train)
-
-    X = tf.reshape(X, [-1, n_ctx, 2])
-    M = tf.reshape(M, [-1, n_ctx])
-
-    h = embed(X, we)
-    for layer in range(n_layer):
-        h = block(h, 'h%d'%layer, train=train, scale=True)
-
-    lm_h = tf.reshape(h[:, :-1], [-1, n_embd])
-    lm_logits = tf.matmul(lm_h, we, transpose_b=True)
-    lm_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=lm_logits, labels=tf.reshape(X[:, 1:, 0], [-1]))
-    lm_losses = tf.reshape(lm_losses, [shape_list(X)[0], shape_list(X)[1]-1])
-    lm_losses = tf.reduce_sum(lm_losses*M[:, 1:], 1)/tf.reduce_sum(M[:, 1:], 1)
-
-    clf_h = tf.reshape(h, [-1, n_embd])
-    pool_idx = tf.cast(tf.argmax(tf.cast(tf.equal(X[:, :, 0], clf_token), tf.float32), 1), tf.int32)
-    clf_h = tf.gather(clf_h, tf.range(shape_list(X)[0], dtype=tf.int32)*n_ctx+pool_idx)
-
-    clf_h = tf.reshape(clf_h, [-1, 2, n_embd])
-    if train and clf_pdrop > 0:
-        shape = shape_list(clf_h)
-        shape[1] = 1
-        clf_h = tf.nn.dropout(clf_h, 1-clf_pdrop, shape)
-    clf_h = tf.reshape(clf_h, [-1, n_embd])
-    clf_logits = clf(clf_h, 1, train=train)
-    clf_logits = tf.reshape(clf_logits, [-1, 2])
-
-    clf_losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=clf_logits, labels=Y)
-    return clf_logits, clf_losses, lm_losses
+        if lm_coef > 0:
+            train_loss = clf_losses.sum() + lm_coef * lm_losses.sum())
+        else:
+            train_loss = clf_losses.sum()
+        return train_loss
 
 def mgpu_train(*xs):
     gpu_ops = []
