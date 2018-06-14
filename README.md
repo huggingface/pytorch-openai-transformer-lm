@@ -1,19 +1,19 @@
-# PyTorch-finetune-transformer-lm
+# PyTorch implementation of OpenAI's Finetuned Transformer Language Model
 
-This is a PyTorch implementation of the [TensorFlow code](https://github.com/openai/finetune-transformer-lm) for OpenAI's paper "Improving Language Understanding by Generative Pre-Training" by Alec Radford, Karthik Narasimhan, Tim Salimans and Ilya Sutskever.
+This is a PyTorch implementation of the [TensorFlow code](https://github.com/openai/finetune-transformer-lm) provided with OpenAI's paper ["Improving Language Understanding by Generative Pre-Training"](https://blog.openai.com/language-unsupervised/) by Alec Radford, Karthik Narasimhan, Tim Salimans and Ilya Sutskever.
 
-This implementation comprises **a script to load the weights pre-trained by the authors**.
+This implementation comprises **a script to load in PyTorch the weights pre-trained by the authors using the TensorFlow implementation**.
 
-The model classes and loading scripts are in the file [model_py.py](model_py.py). The name of the class instance follow the name used in the original implementation. The re-implementation also comprises an implementation of the modifier Adam optimization algorithm with fixed weights from OpenAI's paper.
+The model classes and loading script are located in [model_py.py](model_py.py). The names of the module intances in the PyTorch model follow the Variable names of the original implementation. This implementation tries to follow the original code as closely as possible. The PyTorch implementation also comprises a PyTorch version of the modified Adam optimization algorithm with fixed weights used in OpenAI's paper.
 
 ## Requirements
 For the model it-self in [model_py.py](model_py.py):
-- pyTorch version >=0.4
+- PyTorch version >=0.4
 
 Additional requirements to run the classifier training script in [train.py](train.py):
 - tqdm
 - sklearn
-- spacy
+- spaCy
 - ftfy
 - pandas
 
@@ -22,8 +22,8 @@ The model can be used independently with the pre-trained weights by the followin
 ```python
 from model_py import Model, load_openai_pretrained_model, DEFAULT_CONFIG
 
-args = DEFAULT_CONFIG,
-vocab = 40000 # Size of your vocabulary
+args = DEFAULT_CONFIG
+vocab = 40000 						# Size of your vocabulary
 model = Model(vocab, args)
 load_openai_pretrained_model(model)
 ```
