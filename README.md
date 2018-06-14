@@ -38,7 +38,7 @@ model = Model(vocab, args)
 load_openai_pretrained_model(model)
 ```
 
-This model generates Transformer's hidden states. You can use the `LMHead` class in [model.py](model.py) to add a decoder tied with the weights of the encoder and get a full language model.
+This model generates Transformer's hidden states. You can use the `LMHead` class in [model.py](model.py) to add a decoder tied with the weights of the encoder and get a full language model. You can also use the `ClfHead` class in [model.py](model.py) to add a classifier on top of the transformer and get a classifier as described in OpenAI's publication. (see an example of both in the `__main__` function of [train.py](train.py))
 
 To use the positional encoder of the transformer, you should encode your dataset using the `encode_dataset()` function of [utils.py](utils.py). Please refer to the beginning of the `__main__` function in [train.py](train.py) to see how to properly define the vocabulary and encode your dataset.
 
