@@ -1,3 +1,4 @@
+import re
 import math
 import json
 import copy
@@ -36,8 +37,13 @@ def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
         n_transfer = 0
     else:
         n_transfer = 1+n_transfer*12
-    assert model.embed.weight.shape == init_params[0].shape
-    model.embed.weight = init_params[0]
+    init_params = [arr.squeeze() for arr in init_params]
+    try:
+        assert model.embed.weight.shape == init_params[0].shape
+    except AssertionError as e:
+        e.args += (model.embed.weight.shape, init_params[0].shape)
+        raise
+    model.embed.weight.data = torch.from_numpy(init_params[0])
     for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
         name = name[6:] # skip "model/"
         assert name[-2:] == ":0"
@@ -45,13 +51,20 @@ def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
         name = name.split('/')
         pointer = model
         for m_name in name:
-            l = re.split('(\d+)', m_name)
+            if re.fullmatch(r'[A-Za-z]+\d+', m_name):
+                l = re.split(r'(\d+)', m_name)
+            else:
+                l = [m_name]
             pointer = getattr(pointer, l[0])
-            if len(l) == 1:
+            if len(l) >= 2:
                 num = int(l[1])
                 pointer = pointer[num]
-        assert pointer.shape == ip.shape
-        pointer = ip
+        try:
+            assert pointer.shape == ip.shape
+        except AssertionError as e:
+            e.args += (pointer.shape, ip.shape)
+            raise
+        pointer.data = torch.from_numpy(ip)
 
 
 class LayerNorm(nn.Module):
@@ -82,7 +95,7 @@ class Conv1D(nn.Module):
 
     def forward(self, x):
         if self.rf == 1:
-            size_out = x.size()[:-1] + [self.nf]
+            size_out = x.size()[:-1] + (self.nf,)
             x = torch.addmm(self.b, x.view(-1, x.size(-1)), self.w)
             x = x.view(*size_out)
         else:
@@ -93,38 +106,35 @@ class Conv1D(nn.Module):
 class Attention(nn.Module):
     def __init__(self, nx, cfg, scale=False):
         super(Attention, self).__init__()
-        n_state = nx # in Attention: n_state=768 (nx=n_embed) 
+        n_state = nx # in Attention: n_state=768 (nx=n_embd) 
         #[switch nx => n_state from Block to Attention to keep identical to TF implem]
         assert n_state % cfg.n_head==0
+        mask_size = n_state // cfg.n_head
+        self.register_buffer('b', torch.tril(torch.ones(mask_size, mask_size)).view(1, 1, mask_size, mask_size))
         self.n_head = cfg.n_head
+        self.split_size = n_state
         self.scale = scale
         self.c_attn = Conv1D(n_state * 3, 1, nx)
         self.c_proj = Conv1D(n_state, 1, nx)
         self.attn_dropout = nn.Dropout(cfg.attn_pdrop)
         self.resid_dropout = nn.Dropout(cfg.resid_pdrop)
 
-    @staticmethod
-    def mask_attn_weights(w):
-        n = w.size(-1)
-        b = torch.tril(np.ones(n, n)).view(1, 1, n, n)
-        return w * b + -1e9*(1-b)
-
     def _attn(self, q, k, v):
         w = torch.matmul(q, k)
         if self.scale:
             w = w / math.sqrt(v.size(-1))
-        w = self.mask_attn_weights(w)
+        w = w * self.b + -1e9*(1-self.b) # TF implem method: mask_attn_weights
         w = nn.Softmax()(w)
         w = self.attn_dropout(w)
         return torch.matmul(w, v)
 
     def merge_heads(self, x):
-        new_x_shape = x.size()[:-2] + [np.prod(x.size()[-2:])]
-        x = x.view(*new_x_shape) # in Tensorflow implem: fct merge_states
-        return x.permute(0, 2, 1, 3)
+        x = x.permute(0, 2, 1, 3).contiguous()
+        new_x_shape = x.size()[:-2] + (x.size(-2) * x.size(-1),)
+        return x.view(*new_x_shape) # in Tensorflow implem: fct merge_states
 
     def split_heads(self, x, k=False):
-        new_x_shape = x.size()[:-1] + [self.n_head, x.size(-1)//self.n_head]
+        new_x_shape = x.size()[:-1] + (self.n_head, x.size(-1)//self.n_head)
         x = x.view(*new_x_shape) # in Tensorflow implem: fct split_states
         if k:
             return x.permute(0, 2, 3, 1)
@@ -133,7 +143,7 @@ class Attention(nn.Module):
 
     def forward(self, x):
         x = self.c_attn(x)
-        query, key, value = x.split(3, dim=2)
+        query, key, value = x.split(self.split_size, dim=2)
         query = self.split_heads(query)
         key = self.split_heads(key, k=True)
         value = self.split_heads(value)
@@ -145,11 +155,11 @@ class Attention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, n_state, cfg): # in MLP: n_state=3072 (4 * n_embed)
+    def __init__(self, n_state, cfg): # in MLP: n_state=3072 (4 * n_embd)
         super(MLP, self).__init__()
-        nx = cfg.n_embed
+        nx = cfg.n_embd
         self.c_fc = Conv1D(n_state, 1, nx)
-        self.c_proj = Conv1D(nx, 1, nx)
+        self.c_proj = Conv1D(nx, 1, n_state)
         self.act = ACT_FNS[cfg.afn]
         self.dropout = nn.Dropout(cfg.resid_pdrop)
 
@@ -162,7 +172,7 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, cfg, scale=False):
         super(Block, self).__init__()
-        nx = cfg.n_embed
+        nx = cfg.n_embd
         self.attn = Attention(nx, cfg, scale)
         self.ln_1 = LayerNorm(nx)
         self.mlp = MLP(4*nx, cfg)
@@ -185,13 +195,12 @@ class Model(nn.Module):
         self.drop = nn.Dropout(cfg.embd_pdrop)
         block = Block(cfg, scale=True)
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(cfg.n_layer)])
-        self.decoder = nn.Linear(cfg.n_embed, vocab, bias=False)
+        self.decoder = nn.Linear(cfg.n_embd, vocab, bias=False)
         self.decoder.weight = self.embed.weight # Tied weights
         self.clf_dropout = nn.Dropout2d(cfg.clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
 
-    def forward(self, x, m):
+    def forward(self, x):
         x = x.view(-1, x.size(2), x.size(3))
-        m = m.view(-1, m.size(2))
         e = self.embed(x)
         h = e.sum(dim=2)
         for block in self.h:
@@ -200,36 +209,37 @@ class Model(nn.Module):
 
 
 class LMHead(nn.Module):
-    """ Language Model Head """
+    """ Language Model Head for the transformer """
     def __init__(self, model, cfg):
         super(LMHead, self).__init__()
-        self.n_embed = cfg.n_embed
-        self.decoder = nn.Linear(cfg.n_embed, model.vocab, bias=False)
+        self.n_embd = cfg.n_embd
+        self.decoder = nn.Linear(cfg.n_embd, model.vocab, bias=False)
         self.decoder.weight = model.embed.weight # Tied weights
 
     def forward(self, h):
         # Truncated Language modeling logits
-        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embed) # Shape: 252, 768
+        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd) # Shape: 252, 768
         lm_logits = self.decoder(h_trunc)
         return lm_logits
 
 
 class ClfHead(nn.Module):
-    """ Classifier Head for the model"""
-    def __init__(self, model, clf_token, cfg):
+    """ Classifier Head for the transformer """
+    def __init__(self, clf_token, cfg):
         super(ClfHead, self).__init__()
-        self.n_embed = cfg.n_embed
+        self.n_embd = cfg.n_embd
         self.clf_token = clf_token
         self.dropout = nn.Dropout2d(cfg.clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
-        self.linear = nn.Linear(cfg.n_embed, 1)
+        self.linear = nn.Linear(cfg.n_embd, 1)
 
     def forward(self, h, x):
         # Classification logits
-        clf_h = h.view(-1, self.n_embed)
-        pool_idx = torch.eq(x[:, :, 0].contiguous().view(-1), self.clf_token)
-        clf_h = clf_h[pool_idx, :]
-        clf_h = clf_h.view(-1, 2, self.n_embed, 1)
+        clf_h = h.view(-1, self.n_embd)
+        flat = x[:, :, :, 0].contiguous().view(-1)
+        #pool_idx = torch.eq(x[:, :, 0].contiguous().view(-1), self.clf_token)
+        clf_h = clf_h[flat == self.clf_token, :] #.index_select(0, pool_idx)
+        clf_h = clf_h.view(-1, 2, self.n_embd, 1)
         clf_h = self.dropout(clf_h)
-        clf_h = clf_h.view(-1, self.n_embed)
+        clf_h = clf_h.view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
         return clf_logits.view(-1, 2)

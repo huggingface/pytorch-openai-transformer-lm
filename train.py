@@ -37,22 +37,24 @@ LR_SCHEDULES = {
 
 class LossCompute:
     "A Loss compute and train function."
-    def __init__(self, lm_criterion, clf_criterion):
+    def __init__(self, lm_criterion, clf_criterion, lm_coef):
         self.lm_criterion = lm_criterion
         self.clf_criterion = clf_criterion
+        self.lm_coef = lm_coef
 
     def __call__(self, X, Y, M, lm_logits, clf_logits):
         # Language modeling loss
-        x_shifted = X[:, 1:, 0].contiguous().view(-1)           # Shape: 252
+        x_shifted = X[:, :, 1:, 0].contiguous().view(-1)           # Shape: 252
+        M = M.view(-1, M.size(2))
         lm_losses = self.lm_criterion(lm_logits, x_shifted)
-        lm_losses = lm_losses.view(X.size(0), X.size(1))
+        lm_losses = lm_losses.view(X.size(0) * X.size(1), X.size(2)-1)
         lm_losses = lm_losses * M[:, 1:]
         lm_losses = lm_losses.sum(1) / torch.sum(M[:, 1:], 1)
 
         # Classification loss
         clf_losses = self.clf_criterion(clf_logits, Y)
-        if lm_coef > 0:
-            train_loss = clf_losses.sum() + lm_coef * lm_losses.sum())
+        if self.lm_coef > 0:
+            train_loss = clf_losses.sum() + self.lm_coef * lm_losses.sum()
         else:
             train_loss = clf_losses.sum()
         return train_loss
@@ -184,10 +186,14 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-    globals().update(args.__dict__)
+    globals().update(args.__dict__) #TODO remove gobal
     random.seed(seed)
     np.random.seed(seed)
-    tf.set_random_seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # torch.device object used throughout this script TODO add gpu setting
+    device = torch.device("cpu") #"cuda" if use_cuda else "cpu")
 
     logger = ResultLogger(path=os.path.join(log_dir, '{}.jsonl'.format(desc)), **args.__dict__)
     text_encoder = TextEncoder(encoder_path, bpe_path)
@@ -220,13 +226,17 @@ if __name__ == '__main__':
     n_batch_train = n_batch*n_gpu
     n_updates_total = (n_train//n_batch_train)*n_iter
 
-    model = Model(vocab, cfg)
-    lm_head = LMHead(model, cfg)
-    clf_head = ClfHead(model, clf_token, cfg)
-    compute_loss = LossCompute(nn.CrossEntropyLoss, nn.CrossEntropyLoss)
+    model = Model(vocab, args)
+    lm_head = LMHead(model, args)
+    clf_head = ClfHead(clf_token, args)
+    compute_loss = LossCompute(nn.CrossEntropyLoss(reduce=False), nn.CrossEntropyLoss(reduce=False), lm_coef) # TODO check loss functions
     # TODO Initialize model (?)
+    # TODO add train() and eval()
+    load_openai_pretrained_model(model, n_ctx, n_special, args)
 
-    load_openai_pretrained_model(model, n_ctx, n_special, cfg)
+    model.to(device)
+    lm_head.to(device)
+    clf_head.to(device)
 
     n_updates = 0
     n_epochs = 0
@@ -240,14 +250,18 @@ if __name__ == '__main__':
     for i in range(n_iter):
         for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
                                        n_batch=n_batch_train, truncate=True, verbose=True):
-            h = model(xmb, mmb)
+            XMB = torch.tensor(xmb, dtype=torch.long).to(device)
+            YMB = torch.tensor(ymb, dtype=torch.long).to(device)
+            MMB = torch.tensor(mmb).to(device)
+            model.train()
+            h = model(XMB)
             lm_logits = lm_head(h)
-            clf_logits = clf_head(h, xmb)
-            loss = compute_loss(xmb, ymb, mmb, lm_logits, clf_logits)
+            clf_logits = clf_head(h, XMB)
+            loss = compute_loss(XMB, YMB, MMB, lm_logits, clf_logits)
             loss.backward()
             
             n_updates += 1
-            if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
+            #if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
                 # log()
         n_epochs += 1
         # log()
