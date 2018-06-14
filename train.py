@@ -17,12 +17,13 @@ from functools import partial
 from sklearn.utils import shuffle
 from sklearn.metrics import accuracy_score
 
-from model_py import Model
+from model_py import Model, LMHead, ClfHead, load_openai_pretrained_model
 from opt import adam, warmup_cosine, warmup_linear, warmup_constant
 from datasets import rocstories
 from analysis import rocstories as rocstories_analysis
 from text_utils import TextEncoder
-from utils import encode_dataset, flatten, iter_data, find_trainable_variables, get_ema_vars, convert_gradient_to_tensor, shape_list, ResultLogger, assign_to_gpu, average_grads, make_path
+from utils import (encode_dataset, flatten, iter_data,
+                   ResultLogger, make_path)
 
 OPT_FNS = {
     'adam':adam,
@@ -36,14 +37,11 @@ LR_SCHEDULES = {
 
 class LossCompute:
     "A Loss compute and train function."
-    def __init__(self, generator, lm_criterion, n_embed, clf_token, opt=None):
-        self.generator = generator
+    def __init__(self, lm_criterion, clf_criterion):
         self.lm_criterion = lm_criterion
-        self.opt = opt
-        self.n_embed = n_embed
-        self.clf_token = clf_token
+        self.clf_criterion = clf_criterion
 
-    def __call__(self, X, Y, M, lm_logits, clf_logits, norm):
+    def __call__(self, X, Y, M, lm_logits, clf_logits):
         # Language modeling loss
         x_shifted = X[:, 1:, 0].contiguous().view(-1)           # Shape: 252
         lm_losses = self.lm_criterion(lm_logits, x_shifted)
@@ -58,39 +56,6 @@ class LossCompute:
         else:
             train_loss = clf_losses.sum()
         return train_loss
-
-# def mgpu_train(*xs):
-#     gpu_ops = []
-#     gpu_grads = []
-#     xs = (tf.split(x, n_gpu, 0) for x in xs)
-#     for i, xs in enumerate(zip(*xs)):
-#         do_reuse = True if i > 0 else None
-#         with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=do_reuse):
-#             clf_logits, clf_losses, lm_losses = model(*xs, train=True, reuse=do_reuse)
-#             if lm_coef > 0:
-#                 train_loss = tf.reduce_mean(clf_losses) + lm_coef*tf.reduce_mean(lm_losses)
-#             else:
-#                 train_loss = tf.reduce_mean(clf_losses)
-#             params = find_trainable_variables("model")
-#             grads = tf.gradients(train_loss, params)
-#             grads = list(zip(grads, params))
-#             gpu_grads.append(grads)
-#             gpu_ops.append([clf_logits, clf_losses, lm_losses])
-#     ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
-#     grads = average_grads(gpu_grads)
-#     grads = [g for g, p in grads]
-#     train = opt_fns[opt](params, grads, lr, partial(lr_schedules[lr_schedule], warmup=lr_warmup), n_updates_total, l2=l2, max_grad_norm=max_grad_norm, vector_l2=vector_l2, b1=b1, b2=b2, e=e)
-#     return [train]+ops
-
-# def mgpu_predict(*xs):
-#     gpu_ops = []
-#     xs = (tf.split(x, n_gpu, 0) for x in xs)
-#     for i, xs in enumerate(zip(*xs)):
-#         with tf.device(assign_to_gpu(i, "/gpu:0")), tf.variable_scope(tf.get_variable_scope(), reuse=True):
-#             clf_logits, clf_losses, lm_losses = model(*xs, train=False, reuse=True)
-#             gpu_ops.append([clf_logits, clf_losses, lm_losses])
-#     ops = [tf.concat(op, 0) for op in zip(*gpu_ops)]
-#     return ops
 
 def transform_roc(X1, X2, X3):
     n_batch = len(X1)
@@ -110,50 +75,60 @@ def transform_roc(X1, X2, X3):
     xmb[:, :, :, 1] = np.arange(n_vocab+n_special, n_vocab+n_special+n_ctx)
     return xmb, mmb
 
-def iter_apply(Xs, Ms, Ys):
-    fns = [lambda x:np.concatenate(x, 0), lambda x:float(np.sum(x))]
-    results = []
-    for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
-        n = len(xmb)
-        if n == n_batch_train:
-            res = sess.run([eval_mgpu_logits, eval_mgpu_clf_loss], {X_train:xmb, M_train:mmb, Y_train:ymb})
-        else:
-            res = sess.run([eval_logits, eval_clf_loss], {X:xmb, M:mmb, Y:ymb})
-        res = [r*n for r in res]
-        results.append(res)
-    results = zip(*results)
-    return [fn(res) for res, fn in zip(results, fns)]
+# def iter_apply(Xs, Ms, Ys):
+#     fns = [lambda x:np.concatenate(x, 0), lambda x:float(np.sum(x))]
+#     results = []
+#     for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
+#         n = len(xmb)
+#         if n == n_batch_train:
+#             res = sess.run([eval_mgpu_logits, eval_mgpu_clf_loss], {X_train:xmb, M_train:mmb, Y_train:ymb})
+#         else:
+#             res = sess.run([eval_logits, eval_clf_loss], {X:xmb, M:mmb, Y:ymb})
+#         res = [r*n for r in res]
+#         results.append(res)
+#     results = zip(*results)
+#     return [fn(res) for res, fn in zip(results, fns)]
 
-def iter_predict(Xs, Ms):
-    logits = []
-    for xmb, mmb in iter_data(Xs, Ms, n_batch=n_batch_train, truncate=False, verbose=True):
-        n = len(xmb)
-        if n == n_batch_train:
-            logits.append(sess.run(eval_mgpu_logits, {X_train:xmb, M_train:mmb}))
-        else:
-            logits.append(sess.run(eval_logits, {X:xmb, M:mmb}))
-    logits = np.concatenate(logits, 0)
-    return logits
+# def iter_predict(Xs, Ms):
+#     logits = []
+#     for xmb, mmb in iter_data(Xs, Ms, n_batch=n_batch_train, truncate=False, verbose=True):
+#         n = len(xmb)
+#         if n == n_batch_train:
+#             logits.append(sess.run(eval_mgpu_logits, {X_train:xmb, M_train:mmb}))
+#         else:
+#             logits.append(sess.run(eval_logits, {X:xmb, M:mmb}))
+#     logits = np.concatenate(logits, 0)
+#     return logits
 
-def save(path):
-    ps = sess.run(params)
-    joblib.dump(ps, make_path(path))
+# def log():
+#     global best_score
+#     tr_logits, tr_cost = iter_apply(trX[:n_valid], trM[:n_valid], trY[:n_valid])
+#     va_logits, va_cost = iter_apply(vaX, vaM, vaY)
+#     tr_cost = tr_cost/len(trY[:n_valid])
+#     va_cost = va_cost/n_valid
+#     tr_acc = accuracy_score(trY[:n_valid], np.argmax(tr_logits, 1))*100.
+#     va_acc = accuracy_score(vaY, np.argmax(va_logits, 1))*100.
+#     logger.log(n_epochs=n_epochs, n_updates=n_updates, tr_cost=tr_cost, va_cost=va_cost, tr_acc=tr_acc, va_acc=va_acc)
+#     print('%d %d %.3f %.3f %.2f %.2f'%(n_epochs, n_updates, tr_cost, va_cost, tr_acc, va_acc))
+#     if submit:
+#         score = va_acc
+#         if score > best_score:
+#             best_score = score
+#             save(os.path.join(save_dir, desc, 'best_params.jl'))
 
-def log():
-    global best_score
-    tr_logits, tr_cost = iter_apply(trX[:n_valid], trM[:n_valid], trY[:n_valid])
-    va_logits, va_cost = iter_apply(vaX, vaM, vaY)
-    tr_cost = tr_cost/len(trY[:n_valid])
-    va_cost = va_cost/n_valid
-    tr_acc = accuracy_score(trY[:n_valid], np.argmax(tr_logits, 1))*100.
-    va_acc = accuracy_score(vaY, np.argmax(va_logits, 1))*100.
-    logger.log(n_epochs=n_epochs, n_updates=n_updates, tr_cost=tr_cost, va_cost=va_cost, tr_acc=tr_acc, va_acc=va_acc)
-    print('%d %d %.3f %.3f %.2f %.2f'%(n_epochs, n_updates, tr_cost, va_cost, tr_acc, va_acc))
-    if submit:
-        score = va_acc
-        if score > best_score:
-            best_score = score
-            save(os.path.join(save_dir, desc, 'best_params.jl'))
+# def predict():
+#     filename = filenames[dataset]
+#     pred_fn = pred_fns[dataset]
+#     label_decoder = label_decoders[dataset]
+#     predictions = pred_fn(iter_predict(teX, teM))
+#     if label_decoder is not None:
+#         predictions = [label_decoder[prediction] for prediction in predictions]
+#     path = os.path.join(submission_dir, filename)
+#     os.makedirs(os.path.dirname(path), exist_ok=True)
+#     with open(path, 'w') as f:
+#         f.write('{}\t{}\n'.format('index', 'prediction'))
+#         for i, prediction in enumerate(predictions):
+#             f.write('{}\t{}\n'.format(i, prediction))
 
 argmax = lambda x:np.argmax(x, 1)
 
@@ -168,20 +143,6 @@ filenames = {
 label_decoders = {
     'rocstories':None,
 }
-
-def predict():
-    filename = filenames[dataset]
-    pred_fn = pred_fns[dataset]
-    label_decoder = label_decoders[dataset]
-    predictions = pred_fn(iter_predict(teX, teM))
-    if label_decoder is not None:
-        predictions = [label_decoder[prediction] for prediction in predictions]
-    path = os.path.join(submission_dir, filename)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write('{}\t{}\n'.format('index', 'prediction'))
-        for i, prediction in enumerate(predictions):
-            f.write('{}\t{}\n'.format(i, prediction))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -260,56 +221,38 @@ if __name__ == '__main__':
     n_updates_total = (n_train//n_batch_train)*n_iter
 
     model = Model(vocab, cfg)
-    # TODO Initialize model
+    lm_head = LMHead(model, cfg)
+    clf_head = ClfHead(model, clf_token, cfg)
+    compute_loss = LossCompute(nn.CrossEntropyLoss, nn.CrossEntropyLoss)
+    # TODO Initialize model (?)
 
-    # Load weights from TF model
-    shapes = json.load(open('model/params_shapes.json'))
-    names = json.load(open('model/parameters_names.json'))
-    offsets = np.cumsum([np.prod(shape) for shape in shapes])
-    init_params = [np.load('model/params_{}.npy'.format(n)) for n in range(10)]
-    init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
-    init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
-    init_params[0] = init_params[0][:n_ctx]
-    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, n_embd)*0.02).astype(np.float32), init_params[0]], 0)
-    del init_params[1]
-    if n_transfer == -1:
-        n_transfer = 0
-    else:
-        n_transfer = 1+n_transfer*12
-    assert model.embed.weight.shape == init_params[0].shape
-    model.embed.weight = init_params[0]
-    for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
-        name = name[6:] # skip "model/"
-        assert name[-2:] == ":0"
-        name = name[:-2]
-        name = name.split('/')
-        pointer = model
-        for m_name in name:
-            l = re.split('(\d+)', m_name)
-            pointer = getattr(pointer, l[0])
-            if len(l) == 1:
-                num = int(l[1])
-                pointer = pointer[num]
-        assert pointer.shape == ip.shape
-        pointer = ip
+    load_openai_pretrained_model(model, n_ctx, n_special, cfg)
 
     n_updates = 0
     n_epochs = 0
     if dataset != 'stsb':
         trYt = trY
     if submit:
-        save(os.path.join(save_dir, desc, 'best_params.jl'))
+        path = os.path.join(save_dir, desc, 'best_params')
+        torch.save(model.state_dict(), make_path(path))
+
     best_score = 0
     for i in range(n_iter):
-        for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random), n_batch=n_batch_train, truncate=True, verbose=True):
-            cost, _ = sess.run([clf_loss, train], {X_train:xmb, M_train:mmb, Y_train:ymb})
+        for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
+                                       n_batch=n_batch_train, truncate=True, verbose=True):
+            h = model(xmb, mmb)
+            lm_logits = lm_head(h)
+            clf_logits = clf_head(h, xmb)
+            loss = compute_loss(xmb, ymb, mmb, lm_logits, clf_logits)
+            loss.backward()
+            
             n_updates += 1
             if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
-                log()
+                # log()
         n_epochs += 1
-        log()
-    if submit:
-        sess.run([p.assign(ip) for p, ip in zip(params, joblib.load(os.path.join(save_dir, desc, 'best_params.jl')))])
-        predict()
-        if analysis:
-            rocstories_analysis(data_dir, os.path.join(submission_dir, 'ROCStories.tsv'), os.path.join(log_dir, 'rocstories.jsonl'))
+        # log()
+    # if submit:
+    #     sess.run([p.assign(ip) for p, ip in zip(params, joblib.load(os.path.join(save_dir, desc, 'best_params.jl')))])
+    #     predict()
+    #     if analysis:
+    #         rocstories_analysis(data_dir, os.path.join(submission_dir, 'ROCStories.tsv'), os.path.join(log_dir, 'rocstories.jsonl'))

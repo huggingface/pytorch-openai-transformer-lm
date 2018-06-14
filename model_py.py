@@ -1,6 +1,8 @@
-import numpy as np
 import math
+import json
 import copy
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,20 +20,53 @@ ACT_FNS = {
     'gelu': gelu
 }
 
+def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
+    # Load weights from TF model
+    n_transfer = cfg.n_transfer
+    shapes = json.load(open(path + '/params_shapes.json'))
+    names = json.load(open(path + '/parameters_names.json'))
+    offsets = np.cumsum([np.prod(shape) for shape in shapes])
+    init_params = [np.load(path + '/params_{}.npy'.format(n)) for n in range(10)]
+    init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
+    init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
+    init_params[0] = init_params[0][:n_ctx]
+    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, cfg.n_embd)*0.02).astype(np.float32), init_params[0]], 0)
+    del init_params[1]
+    if n_transfer == -1:
+        n_transfer = 0
+    else:
+        n_transfer = 1+n_transfer*12
+    assert model.embed.weight.shape == init_params[0].shape
+    model.embed.weight = init_params[0]
+    for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
+        name = name[6:] # skip "model/"
+        assert name[-2:] == ":0"
+        name = name[:-2]
+        name = name.split('/')
+        pointer = model
+        for m_name in name:
+            l = re.split('(\d+)', m_name)
+            pointer = getattr(pointer, l[0])
+            if len(l) == 1:
+                num = int(l[1])
+                pointer = pointer[num]
+        assert pointer.shape == ip.shape
+        pointer = ip
+
 
 class LayerNorm(nn.Module):
     "Construct a layernorm module (See citation for details)."
-    def __init__(self, n_state, eps=1e-6):
+    def __init__(self, n_state, e=1e-5):
         super(LayerNorm, self).__init__()
         self.g = nn.Parameter(torch.ones(n_state))
         self.b = nn.Parameter(torch.zeros(n_state))
-        self.eps = eps
+        self.e = e
 
     def forward(self, x):
-        mean = x.mean(-1, keepdim=True)
-        std = x.std(-1, keepdim=True)
-        # One difference with the TF version here: we add epsilon outside of sqrt
-        return self.g * (x - mean) / (std + self.eps) + self.b
+        u = x.mean(-1, keepdim=True)
+        s = (x - u).pow(2).mean(-1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.e)
+        return self.g * x + self.b
 
 
 class Conv1D(nn.Module):
@@ -145,6 +180,7 @@ class Model(nn.Module):
     """ Transformer model """
     def __init__(self, vocab, cfg):
         super(Model, self).__init__()
+        self.vocab = vocab
         self.embed = nn.Embedding(vocab, cfg.n_embd)
         self.drop = nn.Dropout(cfg.embd_pdrop)
         block = Block(cfg, scale=True)
@@ -160,18 +196,40 @@ class Model(nn.Module):
         h = e.sum(dim=2)
         for block in self.h:
             h = block(h)
+        return h
 
-        # Language modeling logits
+
+class LMHead(nn.Module):
+    """ Language Model Head """
+    def __init__(self, model, cfg):
+        super(LMHead, self).__init__()
+        self.n_embed = cfg.n_embed
+        self.decoder = nn.Linear(cfg.n_embed, model.vocab, bias=False)
+        self.decoder.weight = model.embed.weight # Tied weights
+
+    def forward(self, h):
+        # Truncated Language modeling logits
         h_trunc = h[:, :-1].contiguous().view(-1, self.n_embed) # Shape: 252, 768
         lm_logits = self.decoder(h_trunc)
+        return lm_logits
 
+
+class ClfHead(nn.Module):
+    """ Classifier Head for the model"""
+    def __init__(self, model, clf_token, cfg):
+        super(ClfHead, self).__init__()
+        self.n_embed = cfg.n_embed
+        self.clf_token = clf_token
+        self.dropout = nn.Dropout2d(cfg.clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
+        self.linear = nn.Linear(cfg.n_embed, 1)
+
+    def forward(self, h, x):
         # Classification logits
         clf_h = h.view(-1, self.n_embed)
         pool_idx = torch.eq(x[:, :, 0].contiguous().view(-1), self.clf_token)
         clf_h = clf_h[pool_idx, :]
         clf_h = clf_h.view(-1, 2, self.n_embed, 1)
-        clf_h = self.clf_dropout(clf_h)
+        clf_h = self.dropout(clf_h)
         clf_h = clf_h.view(-1, self.n_embed)
         clf_logits = self.linear(clf_h)
-
-        return lm_logits, clf_logits
+        return clf_logits.view(-1, 2)
