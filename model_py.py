@@ -60,13 +60,12 @@ class Conv1D(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, nx, cfg, scale=False):
+    def __init__(self, nx, n_ctx, cfg, scale=False):
         super(Attention, self).__init__()
         n_state = nx # in Attention: n_state=768 (nx=n_embd) 
         #[switch nx => n_state from Block to Attention to keep identical to TF implem]
         assert n_state % cfg.n_head==0
-        mask_size = n_state // cfg.n_head
-        self.register_buffer('b', torch.tril(torch.ones(mask_size, mask_size)).view(1, 1, mask_size, mask_size))
+        self.register_buffer('b', torch.tril(torch.ones(n_ctx, n_ctx)).view(1, 1, n_ctx, n_ctx))
         self.n_head = cfg.n_head
         self.split_size = n_state
         self.scale = scale
@@ -126,10 +125,10 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, cfg, scale=False):
+    def __init__(self, n_ctx, cfg, scale=False):
         super(Block, self).__init__()
         nx = cfg.n_embd
-        self.attn = Attention(nx, cfg, scale)
+        self.attn = Attention(nx, n_ctx, cfg, scale)
         self.ln_1 = LayerNorm(nx)
         self.mlp = MLP(4*nx, cfg)
         self.ln_2 = LayerNorm(nx)
@@ -144,12 +143,12 @@ class Block(nn.Module):
 
 class Model(nn.Module):
     """ Transformer model """
-    def __init__(self, vocab, cfg):
+    def __init__(self, vocab, n_ctx, cfg):
         super(Model, self).__init__()
         self.vocab = vocab
         self.embed = nn.Embedding(vocab, cfg.n_embd)
         self.drop = nn.Dropout(cfg.embd_pdrop)
-        block = Block(cfg, scale=True)
+        block = Block(n_ctx, cfg, scale=True)
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(cfg.n_layer)])
         self.decoder = nn.Linear(cfg.n_embd, vocab, bias=False)
         self.decoder.weight = self.embed.weight # Tied weights
@@ -205,12 +204,12 @@ class ClfHead(nn.Module):
         return clf_logits.view(-1, 2)
 
 
-def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='model'):
+def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/', path_names='./'):
     # Load weights from TF model
-    shapes = json.load(open(path + '/params_shapes.json'))
-    names = json.load(open(path + '/parameters_names.json'))
+    names = json.load(open(path_names + 'parameters_names.json'))
+    shapes = json.load(open(path + 'params_shapes.json'))
     offsets = np.cumsum([np.prod(shape) for shape in shapes])
-    init_params = [np.load(path + '/params_{}.npy'.format(n)) for n in range(10)]
+    init_params = [np.load(path + 'params_{}.npy'.format(n)) for n in range(10)]
     init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
     init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
     if n_ctx > 0:

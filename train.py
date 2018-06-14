@@ -3,7 +3,6 @@ import os
 import time
 import math
 import json
-import joblib
 import random
 import argparse
 import numpy as np
@@ -76,8 +75,9 @@ def transform_roc(X1, X2, X3):
     return xmb, mmb
 
 def iter_apply(Xs, Ms, Ys):
-    fns = [lambda x: np.concatenate(x, 0), lambda x: float(np.sum(x))]
-    results = []
+    # fns = [lambda x: np.concatenate(x, 0), lambda x: float(np.sum(x))]
+    logits = []
+    cost = 0
     with torch.no_grad():
         model.eval()
         for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
@@ -87,11 +87,13 @@ def iter_apply(Xs, Ms, Ys):
             MMB = torch.tensor(mmb).to(device)
             h = model(XMB)
             clf_logits = clf_head(h, XMB)
+            clf_logits *= n
             clf_losses = compute_loss_fct(XMB, YMB, MMB, clf_logits, only_return_losses=True)
-            res = (clf_logits.numpy()*n, clf_losses.numpy()*n)
-            results.append(res)
-        results = zip(*results)
-    return [fn(res) for res, fn in zip(results, fns)]
+            clf_losses *= n
+            logits.append(clf_logits.to("cpu").numpy())
+            cost += clf_losses.sum().item()
+        logits = np.concatenate(logits, 0)
+    return logits, cost
 
 def iter_predict(Xs, Ms):
     logits = []
@@ -103,12 +105,13 @@ def iter_predict(Xs, Ms):
             MMB = torch.tensor(mmb).to(device)
             h = model(XMB)
             clf_logits = clf_head(h, XMB)
-            logits.append(clf_logits.numpy())
+            logits.append(clf_logits.to("cpu").numpy())
     logits = np.concatenate(logits, 0)
     return logits
 
 def log():
     global best_score
+    print("Logging")
     tr_logits, tr_cost = iter_apply(trX[:n_valid], trM[:n_valid], trY[:n_valid])
     va_logits, va_cost = iter_apply(vaX, vaM, vaY)
     tr_cost = tr_cost/len(trY[:n_valid])
@@ -142,10 +145,10 @@ def run_epoch():
     for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
                                     n_batch=n_batch_train, truncate=True, verbose=True):
         global n_updates
+        model.train()
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        model.train()
         h = model(XMB)
         lm_logits = lm_head(h)
         clf_logits = clf_head(h, XMB)
@@ -194,7 +197,7 @@ if __name__ == '__main__':
     parser.add_argument('--clf_pdrop', type=float, default=0.1)
     parser.add_argument('--l2', type=float, default=0.01)
     parser.add_argument('--vector_l2', action='store_true')
-    parser.add_argument('--n_gpu', type=int, default=4)
+    parser.add_argument('--n_gpu', type=int, default=1)#4) # TODO add mutli-gpu training logic
     parser.add_argument('--opt', type=str, default='adam')
     parser.add_argument('--afn', type=str, default='gelu')
     parser.add_argument('--lr_schedule', type=str, default='warmup_linear')
@@ -205,6 +208,7 @@ if __name__ == '__main__':
     parser.add_argument('--b1', type=float, default=0.9)
     parser.add_argument('--b2', type=float, default=0.999)
     parser.add_argument('--e', type=float, default=1e-8)
+    parser.add_argument('--n_valid', type=int, default=374)
 
     args = parser.parse_args()
     print(args)
@@ -215,14 +219,14 @@ if __name__ == '__main__':
     torch.cuda.manual_seed_all(seed)
 
     # torch.device object used throughout this script TODO add gpu setting
-    device = torch.device("cpu") #"cuda" if use_cuda else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     logger = ResultLogger(path=os.path.join(log_dir, '{}.jsonl'.format(desc)), **args.__dict__)
     text_encoder = TextEncoder(encoder_path, bpe_path)
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
 
-    (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir), encoder=text_encoder)
+    (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(rocstories(data_dir, n_valid=n_valid), encoder=text_encoder)
     n_y = 2
     encoder['_start_'] = len(encoder)
     encoder['_delimiter_'] = len(encoder)
@@ -231,10 +235,13 @@ if __name__ == '__main__':
     n_special = 3
     max_len = n_ctx//2-2
     n_ctx = min(max(
-                    [len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]
-                    +[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
-                    +[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
-                   )+3,
+                    [len(x1[:max_len]) + max(len(x2[:max_len]),
+                                             len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]
+                    +[len(x1[:max_len]) + max(len(x2[:max_len]),
+                                              len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
+                    +[len(x1[:max_len]) + max(len(x2[:max_len]),
+                                              len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
+                   ) + 3,
                 n_ctx)
     vocab = n_vocab + n_special + n_ctx
     trX, trM = transform_roc(trX1, trX2, trX3)
@@ -247,7 +254,7 @@ if __name__ == '__main__':
     n_batch_train = n_batch*n_gpu
     n_updates_total = (n_train//n_batch_train)*n_iter
 
-    model = Model(vocab, args)
+    model = Model(vocab, n_ctx, args)
     lm_head = LMHead(model, args)
     clf_head = ClfHead(clf_token, args)
 
@@ -271,8 +278,8 @@ if __name__ == '__main__':
         path = os.path.join(save_dir, desc, 'best_params')
         torch.save(model.state_dict(), make_path(path))
     best_score = 0
-    log()
     for i in range(n_iter):
+        print("running epoch", i)
         run_epoch()
         n_epochs += 1
         log()
