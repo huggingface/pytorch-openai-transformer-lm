@@ -20,51 +20,6 @@ ACT_FNS = {
     'gelu': gelu
 }
 
-def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
-    # Load weights from TF model
-    n_transfer = cfg.n_transfer
-    shapes = json.load(open(path + '/params_shapes.json'))
-    names = json.load(open(path + '/parameters_names.json'))
-    offsets = np.cumsum([np.prod(shape) for shape in shapes])
-    init_params = [np.load(path + '/params_{}.npy'.format(n)) for n in range(10)]
-    init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
-    init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
-    init_params[0] = init_params[0][:n_ctx]
-    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, cfg.n_embd)*0.02).astype(np.float32), init_params[0]], 0)
-    del init_params[1]
-    if n_transfer == -1:
-        n_transfer = 0
-    else:
-        n_transfer = 1+n_transfer*12
-    init_params = [arr.squeeze() for arr in init_params]
-    try:
-        assert model.embed.weight.shape == init_params[0].shape
-    except AssertionError as e:
-        e.args += (model.embed.weight.shape, init_params[0].shape)
-        raise
-    model.embed.weight.data = torch.from_numpy(init_params[0])
-    for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
-        name = name[6:] # skip "model/"
-        assert name[-2:] == ":0"
-        name = name[:-2]
-        name = name.split('/')
-        pointer = model
-        for m_name in name:
-            if re.fullmatch(r'[A-Za-z]+\d+', m_name):
-                l = re.split(r'(\d+)', m_name)
-            else:
-                l = [m_name]
-            pointer = getattr(pointer, l[0])
-            if len(l) >= 2:
-                num = int(l[1])
-                pointer = pointer[num]
-        try:
-            assert pointer.shape == ip.shape
-        except AssertionError as e:
-            e.args += (pointer.shape, ip.shape)
-            raise
-        pointer.data = torch.from_numpy(ip)
-
 
 class LayerNorm(nn.Module):
     "Construct a layernorm module (See citation for details)."
@@ -87,7 +42,9 @@ class Conv1D(nn.Module):
         self.rf = rf
         self.nf = nf
         if rf == 1: #faster 1x1 conv
-            self.w = Parameter(torch.ones(nx, nf)) # TODO change to random normal
+            w = torch.empty(nx, nf)
+            nn.init.normal_(w, std=0.02)
+            self.w = Parameter(w)
             self.b = Parameter(torch.zeros(nf))
         else: #was used to train LM
             raise NotImplementedError
@@ -123,7 +80,7 @@ class Attention(nn.Module):
         if self.scale:
             w = w / math.sqrt(v.size(-1))
         w = w * self.b + -1e9*(1-self.b) # TF implem method: mask_attn_weights
-        w = nn.Softmax()(w)
+        w = nn.Softmax(dim=-1)(w)
         w = self.attn_dropout(w)
         return torch.matmul(w, v)
 
@@ -198,6 +155,8 @@ class Model(nn.Module):
         self.decoder.weight = self.embed.weight # Tied weights
         self.clf_dropout = nn.Dropout2d(cfg.clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
 
+        nn.init.normal_(self.embed.weight, std=0.02)
+
     def forward(self, x):
         x = x.view(-1, x.size(2), x.size(3))
         e = self.embed(x)
@@ -230,6 +189,8 @@ class ClfHead(nn.Module):
         self.clf_token = clf_token
         self.dropout = nn.Dropout2d(cfg.clf_pdrop) # To reproduce the noise_shape parameter of TF implementation
         self.linear = nn.Linear(cfg.n_embd, 1)
+        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.bias, 0)
 
     def forward(self, h, x):
         # Classification logits
@@ -242,3 +203,49 @@ class ClfHead(nn.Module):
         clf_h = clf_h.view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
         return clf_logits.view(-1, 2)
+
+
+def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
+    # Load weights from TF model
+    n_transfer = cfg.n_transfer
+    shapes = json.load(open(path + '/params_shapes.json'))
+    names = json.load(open(path + '/parameters_names.json'))
+    offsets = np.cumsum([np.prod(shape) for shape in shapes])
+    init_params = [np.load(path + '/params_{}.npy'.format(n)) for n in range(10)]
+    init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
+    init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
+    init_params[0] = init_params[0][:n_ctx]
+    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, cfg.n_embd)*0.02).astype(np.float32), init_params[0]], 0)
+    del init_params[1]
+    if n_transfer == -1:
+        n_transfer = 0
+    else:
+        n_transfer = 1+n_transfer*12
+    init_params = [arr.squeeze() for arr in init_params]
+    try:
+        assert model.embed.weight.shape == init_params[0].shape
+    except AssertionError as e:
+        e.args += (model.embed.weight.shape, init_params[0].shape)
+        raise
+    model.embed.weight.data = torch.from_numpy(init_params[0])
+    for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
+        name = name[6:] # skip "model/"
+        assert name[-2:] == ":0"
+        name = name[:-2]
+        name = name.split('/')
+        pointer = model
+        for m_name in name:
+            if re.fullmatch(r'[A-Za-z]+\d+', m_name):
+                l = re.split(r'(\d+)', m_name)
+            else:
+                l = [m_name]
+            pointer = getattr(pointer, l[0])
+            if len(l) >= 2:
+                num = int(l[1])
+                pointer = pointer[num]
+        try:
+            assert pointer.shape == ip.shape
+        except AssertionError as e:
+            e.args += (pointer.shape, ip.shape)
+            raise
+        pointer.data = torch.from_numpy(ip)

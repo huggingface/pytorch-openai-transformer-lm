@@ -1,7 +1,7 @@
 import math
 import torch
 from torch.optim import Optimizer
-from torch.nn.utils import clip_grad_norm
+from torch.nn.utils import clip_grad_norm_
 
 def warmup_cosine(x, warmup=0.002):
     s = 1 if x <= warmup else 0
@@ -81,12 +81,12 @@ class OpenAIAdam(Optimizer):
 
                 # Add grad clipping
                 if group['max_grad_norm'] > 0:
-                    clip_grad_norm(p, group['max_grad_norm'])
+                    clip_grad_norm_(p, group['max_grad_norm'])
 
                 # Decay the first and second moment running average coefficient
                 exp_avg.mul_(beta1).add_(1 - beta1, grad)
                 exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
-                denom = exp_avg_sq.sqrt().add_(group['eps'])
+                denom = exp_avg_sq.sqrt().add_(group['e'])
 
                 bias_correction1 = 1 - beta1 ** state['step']
                 bias_correction2 = 1 - beta2 ** state['step']
