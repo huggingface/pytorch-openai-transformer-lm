@@ -52,15 +52,16 @@ As with the [TensorFlow code](https://github.com/openai/finetune-transformer-lm)
 python train.py --dataset rocstories --desc rocstories --submit --analysis --data_dir [path to data here]
 ```
 
-#### Accuracy on the ROCStories test set
+#### First experiments on the ROCStories test set
 Finetuning the PyTorch model for 3 Epochs on ROCStories takes 10 minutes to run on a single NVidia K-80.
 
-The test accuracy of this PyTorch version (with the default TensorFlow hyper-parameters not finetuned for the differences between PyTorch and TensorFlow internal operations) is 83.43%.
-The authors reports a median accuracy with the TensorFlow code of 85.8%.
-The paper reports a best accuracy of 86.5%.
-The previous SOTA on the ROCStories dataset is 77.6 (Hidden Coherence Model of Chaturvedi et al. in "Story Comprehension for Predicting What Happens Next" EMNLP 2017. Which is a very nice paper by the way, you should check it out)
+The test accuracy of this PyTorch version is 83.43% (with the default TensorFlow hyper-parameters not finetuned on the PyTorch model to take into account the differences between PyTorch and TensorFlow internals).
 
-As noted by the author, the code can be non-deterministic due to various GPU ops.
+The authors reports a median accuracy with the TensorFlow code of 85.8%.
+
+The paper reports a best single run accuracy of 86.5%.
+
+The previous SOTA on the ROCStories dataset is 77.6% ("Hidden Coherence Model" of Chaturvedi et al. published in "Story Comprehension for Predicting What Happens Next" EMNLP 2017. Which is a very nice paper by the way, you should check it out)
 
 ### TO-DO list
 - [ ] Add Multi-GPU training logic
