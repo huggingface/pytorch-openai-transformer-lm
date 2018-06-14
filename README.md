@@ -33,8 +33,7 @@ The model can be used as a transformer language model with OpenAI's pre-trained 
 from model_py import Model, load_openai_pretrained_model, DEFAULT_CONFIG
 
 args = DEFAULT_CONFIG
-vocab = 40000 # Size of your vocabulary
-model = Model(vocab, args)
+model = Model(args)
 load_openai_pretrained_model(model)
 ```
 

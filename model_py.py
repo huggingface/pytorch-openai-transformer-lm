@@ -143,7 +143,7 @@ class Block(nn.Module):
 
 class Model(nn.Module):
     """ Transformer model """
-    def __init__(self, vocab, n_ctx, cfg):
+    def __init__(self, cfg, vocab=40990, n_ctx=512):
         super(Model, self).__init__()
         self.vocab = vocab
         self.embed = nn.Embedding(vocab, cfg.n_embd)
@@ -270,4 +270,5 @@ DEFAULT_CONFIG = dotdict({
     'embd_pdrop': 0.1,
     'attn_pdrop': 0.1,
     'resid_pdrop': 0.1,
+    'afn': 'gelu',
     'clf_pdrop': 0.1})
