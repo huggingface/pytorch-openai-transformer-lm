@@ -57,7 +57,6 @@ class LossCompute:
             self.opt.zero_grad()
         return train_loss.item()
 
-
 def transform_roc(X1, X2, X3):
     n_batch = len(X1)
     xmb = np.zeros((n_batch, 2, n_ctx, 2), dtype=np.int32)
@@ -88,7 +87,7 @@ def iter_apply(Xs, Ms, Ys):
             MMB = torch.tensor(mmb).to(device)
             h = model(XMB)
             clf_logits = clf_head(h, XMB)
-            clf_losses = compute_loss(XMB, YMB, MMB, clf_logits, only_return_losses=True)
+            clf_losses = compute_loss_fct(XMB, YMB, MMB, clf_logits, only_return_losses=True)
             res = (clf_logits.numpy()*n, clf_losses.numpy()*n)
             results.append(res)
         results = zip(*results)
@@ -150,7 +149,7 @@ def run_epoch():
         h = model(XMB)
         lm_logits = lm_head(h)
         clf_logits = clf_head(h, XMB)
-        compute_loss(XMB, YMB, MMB, clf_logits, lm_logits)
+        compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
             log()
@@ -209,7 +208,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-    globals().update(args.__dict__) #TODO remove gobal
+    globals().update(args.__dict__) #TODO maybe we want to remove these gobal variables to make it cleaner
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -231,13 +230,12 @@ if __name__ == '__main__':
     clf_token = encoder['_classify_']
     n_special = 3
     max_len = n_ctx//2-2
-    n_ctx = min(
-                max(
+    n_ctx = min(max(
                     [len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(trX1, trX2, trX3)]
                     +[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
                     +[len(x1[:max_len])+max(len(x2[:max_len]), len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
-                   )+3, n_ctx
-                )
+                   )+3,
+                n_ctx)
     vocab = n_vocab + n_special + n_ctx
     trX, trM = transform_roc(trX1, trX2, trX3)
     vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
@@ -258,10 +256,8 @@ if __name__ == '__main__':
                             warmup=lr_warmup, t_total=n_updates_total, b1=b1,
                             b2=b2, e=e, l2=l2, vector_l2=vector_l2,
                             max_grad_norm=max_grad_norm)
-
-    compute_loss = LossCompute(criterion, criterion, lm_coef, model_opt)
-    # TODO add train() and eval()
-    load_openai_pretrained_model(model, n_ctx, n_special, args)
+    compute_loss_fct = LossCompute(criterion, criterion, lm_coef, model_opt)
+    load_openai_pretrained_model(model, n_ctx=n_ctx, n_special=n_special)
 
     model.to(device)
     lm_head.to(device)

@@ -205,17 +205,25 @@ class ClfHead(nn.Module):
         return clf_logits.view(-1, 2)
 
 
-def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
+def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='model'):
     # Load weights from TF model
-    n_transfer = cfg.n_transfer
     shapes = json.load(open(path + '/params_shapes.json'))
     names = json.load(open(path + '/parameters_names.json'))
     offsets = np.cumsum([np.prod(shape) for shape in shapes])
     init_params = [np.load(path + '/params_{}.npy'.format(n)) for n in range(10)]
     init_params = np.split(np.concatenate(init_params, 0), offsets)[:-1]
     init_params = [param.reshape(shape) for param, shape in zip(init_params, shapes)]
-    init_params[0] = init_params[0][:n_ctx]
-    init_params[0] = np.concatenate([init_params[1], (np.random.randn(n_special, cfg.n_embd)*0.02).astype(np.float32), init_params[0]], 0)
+    if n_ctx > 0:
+        init_params[0] = init_params[0][:n_ctx]
+    if n_special > 0:
+        init_params[0] = np.concatenate([init_params[1],
+                                        (np.random.randn(n_special, n_embd)*0.02).astype(np.float32),
+                                        init_params[0]
+                                        ], 0)
+    else:
+        init_params[0] = np.concatenate([init_params[1],
+                                        init_params[0]
+                                        ], 0)
     del init_params[1]
     if n_transfer == -1:
         n_transfer = 0
@@ -249,3 +257,18 @@ def load_openai_pretrained_model(model, n_ctx, n_special, cfg, path='model'):
             e.args += (pointer.shape, ip.shape)
             raise
         pointer.data = torch.from_numpy(ip)
+
+class dotdict(dict):
+    """dot.notation access to dictionary attributes"""
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+DEFAULT_CONFIG = dotdict({
+    'n_embd': 768,
+    'n_head': 12,
+    'n_layer': 12,
+    'embd_pdrop': 0.1,
+    'attn_pdrop': 0.1,
+    'resid_pdrop': 0.1,
+    'clf_pdrop': 0.1})
