@@ -2,46 +2,64 @@
 
 This is a PyTorch implementation of the [TensorFlow code](https://github.com/openai/finetune-transformer-lm) provided with OpenAI's paper ["Improving Language Understanding by Generative Pre-Training"](https://blog.openai.com/language-unsupervised/) by Alec Radford, Karthik Narasimhan, Tim Salimans and Ilya Sutskever.
 
-This implementation comprises **a script to load in PyTorch the weights pre-trained by the authors using the TensorFlow implementation**.
+This implementation comprises **a script to load in the PyTorch model the weights pre-trained by the authors** with the TensorFlow implementation.
 
-The model classes and loading script are located in [model_py.py](model_py.py). The names of the module intances in the PyTorch model follow the Variable names of the original implementation. This implementation tries to follow the original code as closely as possible. The PyTorch implementation also comprises a PyTorch version of the modified Adam optimization algorithm with fixed weights used in OpenAI's paper.
+![Transformer Language Model](assets/ftlm.png)
+
+The model classes and loading script are located in [model_py.py](model_py.py).
+
+The names of the modules in the PyTorch model follow the names of the Variable in the TensorFlow implementation. This implementation tries to follow the original code as closely as possible to minimize the discrepancies.
+
+This implementation thus also comprises a modified Adam optimization algorithm as used in OpenAI's paper with:
+- fixed weights decay following the work of [Loshchilov et al.](https://arxiv.org/abs/1711.05101), and
+- scheduled learning rate as [commonly used for Transformers](http://nlp.seas.harvard.edu/2018/04/03/attention.html#optimizer).
 
 ## Requirements
-For the model it-self in [model_py.py](model_py.py):
-- PyTorch version >=0.4
+To use the model it-self by importing [model_py.py](model_py.py), you just need:
+- PyTorch (version >=0.4)
 
-Additional requirements to run the classifier training script in [train.py](train.py):
+To run the classifier training script in [train.py](train.py) you will need in addition:
 - tqdm
 - sklearn
-- spaCy
+- spacy
 - ftfy
 - pandas
 
-## Use the pre-trained model as a Transformer Language Model
-The model can be used independently with the pre-trained weights by the following code:
+## Using the pre-trained model as a Transformer Language Model
+The model can be used as a transformer language model with OpenAI's pre-trained weights as follow:
 ```python
 from model_py import Model, load_openai_pretrained_model, DEFAULT_CONFIG
 
 args = DEFAULT_CONFIG
-vocab = 40000 						# Size of your vocabulary
+vocab = 40000 # Size of your vocabulary
 model = Model(vocab, args)
 load_openai_pretrained_model(model)
 ```
 
-You should encode your dataset using the `encode_dataset()` function of [utils.py](utils.py). Please refer to the beginning of the `__main__` function in [train.py](train.py) to see how to properly define your vocabulary and encode your dataset
+This model generates Transformer's hidden states. You can use the `LMHead` class in [model.py](model.py) to add a decoder tied with the weights of the encoder and get a full language model.
 
-## Fine-tune the pre-trained model on a classification task
-The model can also be integrated in a classifier, for example to use it on the ROCStories Cloze Test task. Such an implementatino is detailed in the training code [train.py](train.py)
+To use the positional encoder of the transformer, you should encode your dataset using the `encode_dataset()` function of [utils.py](utils.py). Please refer to the beginning of the `__main__` function in [train.py](train.py) to see how to properly define the vocabulary and encode your dataset.
 
-As the [TensorFlow code](https://github.com/openai/finetune-transformer-lm), this code implements the ROCStories Cloze Test result reported in the paper.
+## Fine-tuning the pre-trained model on a classification task
+This model can also be integrated in a classifier as detailed in [OpenAI's paper](https://blog.openai.com/language-unsupervised/). An example of fine-tuning on the ROCStories Cloze task is included with the training code in [train.py](train.py)
 
 The ROCStories dataset can be downloaded from the associated [website](http://cs.rochester.edu/nlp/rocstories/).
 
-This results can be reproduced by running:
-`python train.py --dataset rocstories --desc rocstories --submit --analysis --data_dir [path to data here]`
+As with the [TensorFlow code](https://github.com/openai/finetune-transformer-lm), this code implements the ROCStories Cloze Test result reported in the paper which can be reproduced by running:
 
-## Note from OpenAI authors
-The code is currently non-deterministic due to various GPU ops. The median accuracy of 10 runs with this codebase (using default hyperparameters) is 85.8% - slightly lower than the reported single run of 86.5% from the paper. 
+```bash
+python train.py --dataset rocstories --desc rocstories --submit --analysis --data_dir [path to data here]
+```
+
+#### Accuracy on the ROCStories test set
+Finetuning the PyTorch model for 3 Epochs on ROCStories takes 10 minutes to run on a single NVidia K-80.
+
+The test accuracy of this PyTorch version (with the default TensorFlow hyper-parameters) is 83.43%.
+
+The authors reports a median accuracy of 10 runs with the TensorFlow code of 85.8%.
+The paper reports a best accuracy of 86.5%.
+
+As noted by the author, the code can be non-deterministic due to various GPU ops.
 
 ### TO-DO list
 - [ ] Add Multi-GPU training logic
