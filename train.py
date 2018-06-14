@@ -18,29 +18,20 @@ from sklearn.utils import shuffle
 from sklearn.metrics import accuracy_score
 
 from model_py import Model, LMHead, ClfHead, load_openai_pretrained_model
-from opt import adam, warmup_cosine, warmup_linear, warmup_constant
+from opt import OpenAIAdam
 from datasets import rocstories
 from analysis import rocstories as rocstories_analysis
 from text_utils import TextEncoder
 from utils import (encode_dataset, flatten, iter_data,
                    ResultLogger, make_path)
 
-OPT_FNS = {
-    'adam':adam,
-}
-
-LR_SCHEDULES = {
-    'warmup_cosine':warmup_cosine,
-    'warmup_linear':warmup_linear,
-    'warmup_constant':warmup_constant,
-}
-
 class LossCompute:
     "A Loss compute and train function."
-    def __init__(self, lm_criterion, clf_criterion, lm_coef):
+    def __init__(self, lm_criterion, clf_criterion, lm_coef, opt=None):
         self.lm_criterion = lm_criterion
         self.clf_criterion = clf_criterion
         self.lm_coef = lm_coef
+        self.opt = opt
 
     def __call__(self, X, Y, M, lm_logits, clf_logits):
         # Language modeling loss
@@ -53,11 +44,18 @@ class LossCompute:
 
         # Classification loss
         clf_losses = self.clf_criterion(clf_logits, Y)
+
         if self.lm_coef > 0:
             train_loss = clf_losses.sum() + self.lm_coef * lm_losses.sum()
         else:
             train_loss = clf_losses.sum()
-        return train_loss
+
+        train_loss.backward()
+        if self.opt is not None:
+            self.opt.step()
+            self.opt.optimizer.zero_grad()
+        return train_loss.item()
+
 
 def transform_roc(X1, X2, X3):
     n_batch = len(X1)
@@ -229,7 +227,14 @@ if __name__ == '__main__':
     model = Model(vocab, args)
     lm_head = LMHead(model, args)
     clf_head = ClfHead(clf_token, args)
-    compute_loss = LossCompute(nn.CrossEntropyLoss(reduce=False), nn.CrossEntropyLoss(reduce=False), lm_coef) # TODO check loss functions
+
+    criterion = nn.CrossEntropyLoss(reduce=False) # TODO check loss functions
+    model_opt = OpenAIAdam(model.parameters(), lr=lr, schedule=lr_schedule,
+                            warmup=lr_warmup, t_total=n_updates_total, b1=b1,
+                            b2=b2, e=e, l2=l2, vector_l2=vector_l2,
+                            max_grad_norm=max_grad_norm)
+
+    compute_loss = LossCompute(criterion, criterion, lm_coef, model_opt)
     # TODO Initialize model (?)
     # TODO add train() and eval()
     load_openai_pretrained_model(model, n_ctx, n_special, args)
@@ -258,8 +263,6 @@ if __name__ == '__main__':
             lm_logits = lm_head(h)
             clf_logits = clf_head(h, XMB)
             loss = compute_loss(XMB, YMB, MMB, lm_logits, clf_logits)
-            loss.backward()
-            
             n_updates += 1
             #if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
                 # log()
