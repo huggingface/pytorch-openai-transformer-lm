@@ -254,7 +254,7 @@ if __name__ == '__main__':
     n_batch_train = n_batch*n_gpu
     n_updates_total = (n_train//n_batch_train)*n_iter
 
-    model = Model(vocab, n_ctx, args)
+    model = Model(args, vocab, n_ctx)
     lm_head = LMHead(model, args)
     clf_head = ClfHead(clf_token, args)
 
