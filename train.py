@@ -259,7 +259,8 @@ if __name__ == '__main__':
     clf_head = ClfHead(clf_token, args)
 
     criterion = nn.CrossEntropyLoss(reduce=False) # TODO check loss functions
-    model_opt = OpenAIAdam(list(model.parameters()) + list(clf_head.parameters()), lr=lr, schedule=lr_schedule,
+    model_opt = OpenAIAdam(list(model.parameters()) + list(clf_head.parameters()) + list(lm_head.parameters()),
+                            lr=lr, schedule=lr_schedule,
                             warmup=lr_warmup, t_total=n_updates_total, b1=b1,
                             b2=b2, e=e, l2=l2, vector_l2=vector_l2,
                             max_grad_norm=max_grad_norm)
