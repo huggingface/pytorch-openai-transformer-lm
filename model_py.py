@@ -6,6 +6,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 def gelu(x):
@@ -22,7 +23,7 @@ ACT_FNS = {
 
 
 class LayerNorm(nn.Module):
-    "Construct a layernorm module (See citation for details)."
+    "Construct a layernorm module in the OpenAI style (epsilon inside the square root)."
     def __init__(self, n_state, e=1e-5):
         super(LayerNorm, self).__init__()
         self.g = nn.Parameter(torch.ones(n_state))
@@ -170,11 +171,10 @@ class LMHead(nn.Module):
     def __init__(self, model, cfg):
         super(LMHead, self).__init__()
         self.n_embd = cfg.n_embd
-        self.decoder = nn.Linear(cfg.n_embd, model.vocab, bias=False)
-        self.decoder.weight = model.embed.weight # Tied weights
+        self.decoder = lambda x: F.linear(x, model.embed.weight) # Tied weights
 
     def forward(self, h):
-        # Truncated Language modeling logits
+        # Truncated Language modeling logits (we remove the last token)
         h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd) # Shape: 252, 768
         lm_logits = self.decoder(h_trunc)
         return lm_logits
@@ -216,12 +216,12 @@ def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n
         init_params[0] = init_params[0][:n_ctx]
     if n_special > 0:
         init_params[0] = np.concatenate([init_params[1],
-                                        (np.random.randn(n_special, n_embd)*0.02).astype(np.float32),
-                                        init_params[0]
+                                         (np.random.randn(n_special, n_embd)*0.02).astype(np.float32),
+                                         init_params[0]
                                         ], 0)
     else:
         init_params[0] = np.concatenate([init_params[1],
-                                        init_params[0]
+                                         init_params[0]
                                         ], 0)
     del init_params[1]
     if n_transfer == -1:
