@@ -55,9 +55,9 @@ python train.py --dataset rocstories --desc rocstories --submit --analysis --dat
 #### First experiments on the ROCStories test set
 Finetuning the PyTorch model for 3 Epochs on ROCStories takes 10 minutes to run on a single NVidia K-80.
 
-The test accuracy of this PyTorch version is 83.43% (with the default TensorFlow hyper-parameters not finetuned on the PyTorch model to take into account the differences between PyTorch and TensorFlow internals).
+The test accuracy of this PyTorch version is 85.25%, while the authors reports a median accuracy with the TensorFlow code of 85.8%.
 
-The authors reports a median accuracy with the TensorFlow code of 85.8%.
+The reason for this small discrepency is likely that the authors implementations uses 8 GPU and can thus accomodate a batch of 64 samples while the present implementation is single GPU and is thus limited to 16 instance on a K80 for memory reasons.
 
 The paper reports a best single run accuracy of 86.5%.
 
