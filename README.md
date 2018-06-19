@@ -55,11 +55,11 @@ python train.py --dataset rocstories --desc rocstories --submit --analysis --dat
 #### First experiments on the ROCStories test set
 Finetuning the PyTorch model for 3 Epochs on ROCStories takes 10 minutes to run on a single NVidia K-80.
 
-The test accuracy of this PyTorch version is 85.25%, while the authors reports a median accuracy with the TensorFlow code of 85.8% and the paper reports a best single run accuracy of 86.5%.
+The single run test accuracy of this PyTorch version is 85.84%, while the authors reports a median accuracy with the TensorFlow code of 85.8% and the paper reports a best single run accuracy of 86.5%.
 
-The reason for this 0.7-1.3% discrepency is likely that the authors implementations uses 8 GPU and can thus accomodate a batch of 64 samples while the present implementation is single GPU and is in consequence limited to 16 instances on a K80 for memory reasons. In our test, increasing the batch size from 8 to 16 samples increased the test accuracy by 2 points.
+The authors implementations uses 8 GPU and can thus accomodate a batch of 64 samples while the present implementation is single GPU and is in consequence limited to 20 instances on a K80 for memory reasons. In our test, increasing the batch size from 8 to 20 samples increased the test accuracy by 2.5 points. A better accuracy may be obtained by using a multi-GPU setting (on the TO-DO list).
 
-The previous SOTA on the ROCStories dataset is 77.6% ("Hidden Coherence Model" of Chaturvedi et al. published in "Story Comprehension for Predicting What Happens Next" EMNLP 2017. Which is a very nice paper by the way, you should check it out)
+The previous SOTA on the ROCStories dataset is 77.6% ("Hidden Coherence Model" of Chaturvedi et al. published in "Story Comprehension for Predicting What Happens Next" EMNLP 2017, which is a very nice paper too!)
 
 ### TO-DO list
 - [ ] Add Multi-GPU training logic
