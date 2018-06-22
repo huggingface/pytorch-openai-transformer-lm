@@ -157,7 +157,7 @@ class Model(nn.Module):
         nn.init.normal_(self.embed.weight, std=0.02)
 
     def forward(self, x):
-        x = x.view(-1, x.size(2), x.size(3))
+        x = x.view(-1, x.size(-2), x.size(-1))
         e = self.embed(x)
         h = e.sum(dim=2)
         for block in self.h:
