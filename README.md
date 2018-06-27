@@ -6,7 +6,7 @@ This implementation comprises **a script to load in the PyTorch model the weight
 
 ![Transformer Language Model](assets/ftlm.png)
 
-The model classes and loading script are located in [model_py.py](model_py.py).
+The model classes and loading script are located in [model_py.py](model_pytorch.py).
 
 The names of the modules in the PyTorch model follow the names of the Variable in the TensorFlow implementation. This implementation tries to follow the original code as closely as possible to minimize the discrepancies.
 
@@ -15,7 +15,7 @@ This implementation thus also comprises a modified Adam optimization algorithm a
 - scheduled learning rate as [commonly used for Transformers](http://nlp.seas.harvard.edu/2018/04/03/attention.html#optimizer).
 
 ## Requirements
-To use the model it-self by importing [model_py.py](model_py.py), you just need:
+To use the model it-self by importing [model_py.py](model_pytorch.py), you just need:
 - PyTorch (version >=0.4)
 
 To run the classifier training script in [train.py](train.py) you will need in addition:
