@@ -109,4 +109,5 @@ venv.bak/
 /site
 
 # mypy
-.mypy_cache/
+.mypy_cache/cloze_data
+cloze_data/
