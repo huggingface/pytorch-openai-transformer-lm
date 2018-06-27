@@ -49,6 +49,7 @@ The ROCStories dataset can be downloaded from the associated [website](http://cs
 As with the [TensorFlow code](https://github.com/openai/finetune-transformer-lm), this code implements the ROCStories Cloze Test result reported in the paper which can be reproduced by running:
 
 ```bash
+python -m spacy download en
 python train.py --dataset rocstories --desc rocstories --submit --analysis --data_dir [path to data here]
 ```
 

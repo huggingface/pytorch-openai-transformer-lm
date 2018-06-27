@@ -1,13 +1,14 @@
-import re
-import math
-import json
 import copy
-import numpy as np
+import json
+import math
+import re
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+
 
 def gelu(x):
     return 0.5*x*(1+torch.tanh(math.sqrt(2/math.pi)*(x+0.044715*torch.pow(x, 3))))
@@ -63,7 +64,7 @@ class Conv1D(nn.Module):
 class Attention(nn.Module):
     def __init__(self, nx, n_ctx, cfg, scale=False):
         super(Attention, self).__init__()
-        n_state = nx # in Attention: n_state=768 (nx=n_embd) 
+        n_state = nx # in Attention: n_state=768 (nx=n_embd)
         #[switch nx => n_state from Block to Attention to keep identical to TF implem]
         assert n_state % cfg.n_head==0
         self.register_buffer('b', torch.tril(torch.ones(n_ctx, n_ctx)).view(1, 1, n_ctx, n_ctx))
