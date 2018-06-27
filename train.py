@@ -10,7 +10,7 @@ from sklearn.utils import shuffle
 
 from analysis import rocstories as rocstories_analysis
 from datasets import rocstories
-from model_pytorch import Model, LMHead, ClfHead, load_openai_pretrained_model
+from model_pytorch import Model, LMHead, ClfHead, load_openai_pretrained_model, DataParallelWithEmbed
 from opt import OpenAIAdam
 from text_utils import TextEncoder
 from utils import (encode_dataset, iter_data,
@@ -237,6 +237,7 @@ if __name__ == '__main__':
     encoder = text_encoder.encoder
     n_vocab = len(text_encoder.encoder)
 
+    print("Encoding dataset...")
     (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(
         rocstories(data_dir, n_valid=args.n_valid), encoder=text_encoder)
     n_y = 2
@@ -266,6 +267,8 @@ if __name__ == '__main__':
     n_updates_total = (n_train // n_batch_train) * args.n_iter
 
     model = Model(args, vocab, n_ctx)
+    model = DataParallelWithEmbed(model).cuda()
+
     lm_head = LMHead(model, args)
     clf_head = ClfHead(clf_token, args)
 
