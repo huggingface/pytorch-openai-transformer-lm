@@ -213,11 +213,12 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-    globals().update(args.__dict__)  # TODO maybe we want to remove these gobal variables to make it cleaner
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    # globals().update(args.__dict__)  # TODO maybe we want to remove these gobal variables to make it cleaner
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     # Constants
     submit = args.submit
@@ -226,6 +227,7 @@ if __name__ == '__main__':
     save_dir = args.save_dir
     desc = args.desc
     data_dir = args.data_dir
+    log_dir = args.log_dir
 
     # torch.device object used throughout this script TODO add gpu setting
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
