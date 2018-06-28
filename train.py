@@ -260,7 +260,7 @@ if __name__ == '__main__':
 
     n_train = len(trY)
     n_valid = len(vaY)
-    n_batch_train = args.n_batch * n_gpu
+    n_batch_train = args.n_batch * max(n_gpu, 1)
     n_updates_total = (n_train // n_batch_train) * args.n_iter
 
     if n_gpu > 1:
