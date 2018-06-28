@@ -10,7 +10,7 @@ from sklearn.utils import shuffle
 
 from analysis import rocstories as rocstories_analysis
 from datasets import rocstories
-from model_pytorch import Model, LMHead, ClfHead, load_openai_pretrained_model, DataParallelWithEmbed
+from model_pytorch import DoubleHeadModel, load_openai_pretrained_model
 from opt import OpenAIAdam
 from text_utils import TextEncoder
 from utils import (encode_dataset, iter_data,
@@ -75,14 +75,13 @@ def iter_apply(Xs, Ms, Ys):
     logits = []
     cost = 0
     with torch.no_grad():
-        model.eval()
+        dh_model.eval()
         for xmb, mmb, ymb in iter_data(Xs, Ms, Ys, n_batch=n_batch_train, truncate=False, verbose=True):
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             YMB = torch.tensor(ymb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            h = model(XMB)
-            clf_logits = clf_head(h, XMB)
+            _, clf_logits = dh_model(XMB)
             clf_logits *= n
             clf_losses = compute_loss_fct(XMB, YMB, MMB, clf_logits, only_return_losses=True)
             clf_losses *= n
@@ -95,13 +94,12 @@ def iter_apply(Xs, Ms, Ys):
 def iter_predict(Xs, Ms):
     logits = []
     with torch.no_grad():
-        model.eval()
+        dh_model.eval()
         for xmb, mmb in iter_data(Xs, Ms, n_batch=n_batch_train, truncate=False, verbose=True):
             n = len(xmb)
             XMB = torch.tensor(xmb, dtype=torch.long).to(device)
             MMB = torch.tensor(mmb).to(device)
-            h = model(XMB)
-            clf_logits = clf_head(h, XMB)
+            _, clf_logits = dh_model(XMB)
             logits.append(clf_logits.to("cpu").numpy())
     logits = np.concatenate(logits, 0)
     return logits
@@ -123,7 +121,7 @@ def log(save_dir, desc):
         if score > best_score:
             best_score = score
             path = os.path.join(save_dir, desc, 'best_params')
-            torch.save(model.state_dict(), make_path(path))
+            torch.save(dh_model.state_dict(), make_path(path))
 
 
 def predict(dataset, submission_dir):
@@ -145,13 +143,11 @@ def run_epoch():
     for xmb, mmb, ymb in iter_data(*shuffle(trX, trM, trYt, random_state=np.random),
                                    n_batch=n_batch_train, truncate=True, verbose=True):
         global n_updates
-        model.train()
+        dh_model.train()
         XMB = torch.tensor(xmb, dtype=torch.long).to(device)
         YMB = torch.tensor(ymb, dtype=torch.long).to(device)
         MMB = torch.tensor(mmb).to(device)
-        h = model(XMB)
-        lm_logits = lm_head(h)
-        clf_logits = clf_head(h, XMB)
+        lm_logits, clf_logits = dh_model(XMB)
         compute_loss_fct(XMB, YMB, MMB, clf_logits, lm_logits)
         n_updates += 1
         if n_updates in [1000, 2000, 4000, 8000, 16000, 32000] and n_epochs == 0:
@@ -198,7 +194,7 @@ if __name__ == '__main__':
     parser.add_argument('--clf_pdrop', type=float, default=0.1)
     parser.add_argument('--l2', type=float, default=0.01)
     parser.add_argument('--vector_l2', action='store_true')
-    parser.add_argument('--n_gpu', type=int, default=1)  # 4) # TODO add mutli-gpu training logic
+    parser.add_argument('--n_gpu', type=int, default=1)
     parser.add_argument('--opt', type=str, default='adam')
     parser.add_argument('--afn', type=str, default='gelu')
     parser.add_argument('--lr_schedule', type=str, default='warmup_linear')
@@ -213,7 +209,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     print(args)
-    # globals().update(args.__dict__)  # TODO maybe we want to remove these gobal variables to make it cleaner
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -238,9 +233,10 @@ if __name__ == '__main__':
     n_vocab = len(text_encoder.encoder)
 
     print("Encoding dataset...")
-    (trX1, trX2, trX3, trY), (vaX1, vaX2, vaX3, vaY), (teX1, teX2, teX3) = encode_dataset(
-        rocstories(data_dir, n_valid=args.n_valid), encoder=text_encoder)
-    n_y = 2
+    ((trX1, trX2, trX3, trY),
+     (vaX1, vaX2, vaX3, vaY),
+     (teX1, teX2, teX3)) = encode_dataset(rocstories(data_dir, n_valid=args.n_valid),
+                                          encoder=text_encoder)
     encoder['_start_'] = len(encoder)
     encoder['_delimiter_'] = len(encoder)
     encoder['_classify_'] = len(encoder)
@@ -254,7 +250,7 @@ if __name__ == '__main__':
                                    len(x3[:max_len])) for x1, x2, x3 in zip(vaX1, vaX2, vaX3)]
         + [len(x1[:max_len]) + max(len(x2[:max_len]),
                                    len(x3[:max_len])) for x1, x2, x3 in zip(teX1, teX2, teX3)]
-    ) + 3, n_ctx)
+        ) + 3, n_ctx)
     vocab = n_vocab + n_special + n_ctx
     trX, trM = transform_roc(trX1, trX2, trX3)
     vaX, vaM = transform_roc(vaX1, vaX2, vaX3)
@@ -266,14 +262,10 @@ if __name__ == '__main__':
     n_batch_train = args.n_batch * args.n_gpu
     n_updates_total = (n_train // n_batch_train) * args.n_iter
 
-    model = Model(args, vocab, n_ctx)
-    model = DataParallelWithEmbed(model).cuda()
+    dh_model = DoubleHeadModel(args, clf_token, vocab, n_ctx)
 
-    lm_head = LMHead(model, args)
-    clf_head = ClfHead(clf_token, args)
-
-    criterion = nn.CrossEntropyLoss(reduce=False)  # TODO check loss functions
-    model_opt = OpenAIAdam(list(model.parameters()) + list(clf_head.parameters()) + list(lm_head.parameters()),
+    criterion = nn.CrossEntropyLoss(reduce=False)
+    model_opt = OpenAIAdam(dh_model.parameters(),
                            lr=args.lr,
                            schedule=args.lr_schedule,
                            warmup=args.lr_warmup,
@@ -288,11 +280,10 @@ if __name__ == '__main__':
                                    criterion,
                                    args.lm_coef,
                                    model_opt)
-    load_openai_pretrained_model(model, n_ctx=n_ctx, n_special=n_special)
+    load_openai_pretrained_model(dh_model.transformer, n_ctx=n_ctx, n_special=n_special)
 
-    model.to(device)
-    lm_head.to(device)
-    clf_head.to(device)
+    dh_model.to(device)
+    dh_model = nn.DataParallel(dh_model)
 
     n_updates = 0
     n_epochs = 0
@@ -300,7 +291,7 @@ if __name__ == '__main__':
         trYt = trY
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
-        torch.save(model.state_dict(), make_path(path))
+        torch.save(dh_model.state_dict(), make_path(path))
     best_score = 0
     for i in range(args.n_iter):
         print("running epoch", i)
@@ -309,7 +300,7 @@ if __name__ == '__main__':
         log(save_dir, desc)
     if submit:
         path = os.path.join(save_dir, desc, 'best_params')
-        model.load_state_dict(torch.load(path))
+        dh_model.load_state_dict(torch.load(path))
         predict(dataset, args.submission_dir)
         if args.analysis:
             rocstories_analysis(data_dir, os.path.join(args.submission_dir, 'ROCStories.tsv'),

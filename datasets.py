@@ -10,7 +10,7 @@ from sklearn.model_selection import train_test_split
 seed = 3535999445
 
 def _rocstories(path):
-    with open(path) as f:
+    with open(path, encoding='utf_8') as f:
         f = csv.reader(f)
         st = []
         ct1 = []

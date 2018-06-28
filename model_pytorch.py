@@ -146,11 +146,11 @@ class Block(nn.Module):
         return h
 
 
-class Model(nn.Module):
+class TransformerModel(nn.Module):
     """ Transformer model """
 
     def __init__(self, cfg, vocab=40990, n_ctx=512):
-        super(Model, self).__init__()
+        super(TransformerModel, self).__init__()
         self.vocab = vocab
         self.embed = nn.Embedding(vocab, cfg.n_embd)
         self.drop = nn.Dropout(cfg.embd_pdrop)
@@ -181,7 +181,7 @@ class LMHead(nn.Module):
 
     def forward(self, h):
         # Truncated Language modeling logits (we remove the last token)
-        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)  # Shape: 252, 768
+        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)
         lm_logits = self.decoder(h_trunc)
         return lm_logits
 
@@ -202,24 +202,27 @@ class ClfHead(nn.Module):
         # Classification logits
         clf_h = h.view(-1, self.n_embd)
         flat = x[:, :, :, 0].contiguous().view(-1)
-        # pool_idx = torch.eq(x[:, :, 0].contiguous().view(-1), self.clf_token)
-        clf_h = clf_h[flat == self.clf_token, :]  # .index_select(0, pool_idx)
-        clf_h = clf_h.view(-1, 2, self.n_embd, 1)
+        clf_h = clf_h[flat == self.clf_token, :]
+        clf_h = clf_h.view(-1, x.size(1), self.n_embd, 1)
         clf_h = self.dropout(clf_h)
         clf_h = clf_h.view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
-        return clf_logits.view(-1, 2)
+        return clf_logits.view(-1, x.size(1))
 
 
-class DataParallelWithEmbed(torch.nn.DataParallel):
-    """DataParallel that proxies the embed property to the wrapped module"""
+class DoubleHeadModel(nn.Module):
+    """ Transformer with language model and classification heads """
+    def __init__(self, cfg, clf_token, vocab=40990, n_ctx=512):
+        super(DoubleHeadModel, self).__init__()
+        self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
+        self.lm_head = LMHead(self.transformer, cfg)
+        self.clf_head = ClfHead(clf_token, cfg)
 
-    def __init__(self, model):
-        super(DataParallelWithEmbed, self).__init__(model)
-
-    @property
-    def embed(self):
-        return self.module.embed
+    def forward(self, x):
+        h = self.transformer(x)
+        lm_logits = self.lm_head(h)
+        clf_logits = self.clf_head(h, x)
+        return lm_logits, clf_logits
 
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
@@ -260,15 +263,12 @@ def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n
 
     model.embed.weight.data = torch.from_numpy(init_params[0])
 
-    # Load the weights into our torch module
-    module = model.module
-
     for name, ip in zip(names[1:n_transfer], init_params[1:n_transfer]):
         name = name[6:]  # skip "model/"
         assert name[-2:] == ":0"
         name = name[:-2]
         name = name.split('/')
-        pointer = module
+        pointer = model
         for m_name in name:
             if re.fullmatch(r'[A-Za-z]+\d+', m_name):
                 l = re.split(r'(\d+)', m_name)
