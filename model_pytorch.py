@@ -177,7 +177,8 @@ class LMHead(nn.Module):
     def __init__(self, model, cfg):
         super(LMHead, self).__init__()
         self.n_embd = cfg.n_embd
-        self.decoder = lambda x: F.linear(x, model.embed.weight)  # Tied weights
+        self.decoder = nn.Linear(embed_shape[1], embed_shape[0], bias=False)
+        self.decoder.weight = model.embed.weight # Tied weights
 
     def forward(self, h):
         # Truncated Language modeling logits (we remove the last token)
