@@ -30,10 +30,10 @@ You can download the weights of the OpenAI pre-trained version by cloning [Alec 
 ## Using the pre-trained model as a Transformer Language Model
 The model can be used as a transformer language model with OpenAI's pre-trained weights as follow:
 ```python
-from model_py import Model, load_openai_pretrained_model, DEFAULT_CONFIG
+from model_pytorch import TransformerModel, load_openai_pretrained_model, DEFAULT_CONFIG
 
 args = DEFAULT_CONFIG
-model = Model(args)
+model = TransformerModel(args)
 load_openai_pretrained_model(model)
 ```
 
