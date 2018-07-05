@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 def encode_dataset(*splits, encoder):
     encoded_splits = []
-    for split in splits[0]:
+    for split in splits:
         fields = []
         for field in split:
             if isinstance(field[0], str):

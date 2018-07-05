@@ -236,7 +236,7 @@ if __name__ == '__main__':
     print("Encoding dataset...")
     ((trX1, trX2, trX3, trY),
      (vaX1, vaX2, vaX3, vaY),
-     (teX1, teX2, teX3)) = encode_dataset(rocstories(data_dir, n_valid=args.n_valid),
+     (teX1, teX2, teX3)) = encode_dataset(*rocstories(data_dir, n_valid=args.n_valid),
                                           encoder=text_encoder)
     encoder['_start_'] = len(encoder)
     encoder['_delimiter_'] = len(encoder)
