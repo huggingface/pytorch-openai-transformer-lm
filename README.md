@@ -6,7 +6,7 @@ This implementation comprises **a script to load in the PyTorch model the weight
 
 ![Transformer Language Model](assets/ftlm.png)
 
-The model classes and loading script are located in [model_py.py](model_pytorch.py).
+The model classes and loading script are located in [model_pytorch.py](model_pytorch.py).
 
 The names of the modules in the PyTorch model follow the names of the Variable in the TensorFlow implementation. This implementation tries to follow the original code as closely as possible to minimize the discrepancies.
 
@@ -15,7 +15,7 @@ This implementation thus also comprises a modified Adam optimization algorithm a
 - scheduled learning rate as [commonly used for Transformers](http://nlp.seas.harvard.edu/2018/04/03/attention.html#optimizer).
 
 ## Requirements
-To use the model it-self by importing [model_py.py](model_pytorch.py), you just need:
+To use the model it-self by importing [model_pytorch.py](model_pytorch.py), you just need:
 - PyTorch (version >=0.4)
 
 To run the classifier training script in [train.py](train.py) you will need in addition:
@@ -37,7 +37,7 @@ model = TransformerModel(args)
 load_openai_pretrained_model(model)
 ```
 
-This model generates Transformer's hidden states. You can use the `LMHead` class in [model.py](model.py) to add a decoder tied with the weights of the encoder and get a full language model. You can also use the `ClfHead` class in [model.py](model.py) to add a classifier on top of the transformer and get a classifier as described in OpenAI's publication. (see an example of both in the `__main__` function of [train.py](train.py))
+This model generates Transformer's hidden states. You can use the `LMHead` class in [model_pytorch.py](model_pytorch.py) to add a decoder tied with the weights of the encoder and get a full language model. You can also use the `ClfHead` class in [model_pytorch.py](model_pytorch.py) to add a classifier on top of the transformer and get a classifier as described in OpenAI's publication. (see an example of both in the `__main__` function of [train.py](train.py))
 
 To use the positional encoder of the transformer, you should encode your dataset using the `encode_dataset()` function of [utils.py](utils.py). Please refer to the beginning of the `__main__` function in [train.py](train.py) to see how to properly define the vocabulary and encode your dataset.
 
