@@ -203,7 +203,7 @@ class ClfHead(nn.Module):
     def forward(self, h, x):
         # Classification logits
         clf_h = h.view(-1, self.n_embd)
-        flat = x[:, :, :, 0].contiguous().view(-1)
+        flat = x[..., 0].contiguous().view(-1)
         clf_h = clf_h[flat == self.clf_token, :]
         clf_h = clf_h.view(-1, x.size(1), self.n_embd, 1)
         clf_h = self.dropout(clf_h)
