@@ -206,8 +206,8 @@ class ClfHead(nn.Module):
         flat = x[:, :, :, 0].contiguous().view(-1)
         clf_h = clf_h[flat == self.clf_token, :]
         clf_h = clf_h.view(-1, x.size(1), self.n_embd, 1)
-        clf_h = self.dropout(clf_h)
-        clf_h = clf_h.view(-1, self.n_embd)
+        clf_h = self.dropout(clf_h.transpose(1, 2)).transpose(1, 2)
+        clf_h = clf_h.continuous.view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
         return clf_logits.view(-1, x.size(1))
 
