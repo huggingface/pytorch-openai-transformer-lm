@@ -158,7 +158,6 @@ class TransformerModel(nn.Module):
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(cfg.n_layer)])
         self.decoder = nn.Linear(cfg.n_embd, vocab, bias=False)
         self.decoder.weight = self.embed.weight  # Tied weights
-        self.clf_dropout = nn.Dropout2d(cfg.clf_pdrop)  # To reproduce the noise_shape parameter of TF implementation
 
         nn.init.normal_(self.embed.weight, std=0.02)
 
