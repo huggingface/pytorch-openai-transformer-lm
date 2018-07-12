@@ -214,6 +214,7 @@ class MultipleChoiceHead(nn.Module):
         clf_logits = self.linear(clf_h)
         return clf_logits.view(-1, x.size(1))
 
+
 class ClfHead(nn.Module):
     """ TODO: test this class."""
     def __init__(self, clf_token, cfg, n_class):
@@ -236,18 +237,22 @@ class ClfHead(nn.Module):
 
 
 class DoubleHeadModel(nn.Module):
-    """ Transformer with language model and multiple choice heads """
-    def __init__(self, cfg, clf_token, vocab=40990, n_ctx=512):
+    """ Transformer with language model and task specific heads """
+    def __init__(self, cfg, clf_token, vocab=40990, n_ctx=512, n_class = None):
         super(DoubleHeadModel, self).__init__()
         self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
         self.lm_head = LMHead(self.transformer, cfg)
-        self.choice_head = MultipleChoiceHead(clf_token, cfg)
+        if n_class is None:
+            self.task_head = MultipleChoiceHead(clf_token, cfg)
+        else:
+            self.task_head = ClfHead(clf_token, cfg, n_class)
 
     def forward(self, x):
         h = self.transformer(x)
         lm_logits = self.lm_head(h)
-        choice_logits = self.choice_head(h, x)
-        return lm_logits, choice_logits
+        task_logits = self.task_head(h, x)
+
+        return lm_logits, task_logits
 
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
