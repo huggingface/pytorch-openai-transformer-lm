@@ -259,6 +259,7 @@ class SimilarityHead(nn.Module):
         flat = x[..., 0].contiguous().view(-1)
         sim_h = sim_h[flat == self.clf_token, :]
         sim_h = self.dropout(sim_h)
+        sim_h = sim_h.sum(dim = 1)
         sim_logits = self.linear(sim_h)
 
         return sim_logits
