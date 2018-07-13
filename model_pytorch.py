@@ -250,7 +250,7 @@ class SimilarityHead(nn.Module):
         self.n_embd = cfg.n_embd
         self.clf_token = clf_token
         self.dropout = nn.Dropout(cfg.clf_pdrop)
-        self.linear = nn.Linear(cfg_n_embd, 3)
+        self.linear = nn.Linear(cfg_n_embd, 1)
 
         nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
@@ -276,13 +276,21 @@ class DoubleHeadModel(nn.Module):
                 self.task_head = MultipleChoiceHead(clf_token, cfg)
             elif task_head_type == 'similarity':
                 self.task_head = SimilarityHead(clf_token, cfg)
+            elif task_head_type == 'inference':
+                # the three classes correspond to entailment, contradiction and neutral.
+                self.task_head = ClfHead(clf_token, cfg, 3)
+            else:
+            raise ValueError("task_head_type is expected to be 'multiple_choice' "
+                             "'similarity', 'inference' or ('classification', n_class) "
+                             f"got {task_head_type}.")
         elif isinstance(task_head_type, collections.abc.Sequence) and len(task_head_type) == 2 and \
              task_head_type[0] == 'classification':
-            n_class = task_head[1]
+            n_class = task_head_type[1]
             self.task_head = ClfHead(clf_token, cfg, n_class)
         else:
-            raise ValueError(f"task_head_type expected to be 'multiple_choice' "
-                             "'similarity' or ('classification', n_class) got {task_head_type}.")
+            raise ValueError("task_head_type is expected to be 'multiple_choice' "
+                             "'similarity', 'inference' or ('classification', n_class) "
+                             f"got {task_head_type}.")
 
     def forward(self, x):
         h = self.transformer(x)
