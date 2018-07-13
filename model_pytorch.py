@@ -185,7 +185,7 @@ class LMHead(nn.Module):
         h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)
         lm_logits = self.decoder(h_trunc)
         return lm_logits
-
+-
 
 class MultipleChoiceHead(nn.Module):
     """ Classifier Head for the transformer """
@@ -196,13 +196,14 @@ class MultipleChoiceHead(nn.Module):
         self.clf_token = clf_token
         self.dropout = nn.Dropout2d(cfg.clf_pdrop)  # To reproduce the noise_shape parameter of TF implementation
         self.linear = nn.Linear(cfg.n_embd, 1)
-        nn.init.normal_(self.linear.weight, std=0.02)
+
+        nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
 
     def forward(self, h, x):
         # Classification logits
         clf_h = h.view(-1, self.n_embd)
-        flat = x[:, :, :, 0].contiguous().view(-1)
+        flat = x[..., 0].contiguous().view(-1)
         clf_h = clf_h[flat == self.clf_token, :]
         clf_h = clf_h.view(-1, x.size(1), self.n_embd, 1)
         # This double transposition is there to replicate the behavior
@@ -212,25 +213,29 @@ class MultipleChoiceHead(nn.Module):
         clf_h = self.dropout(clf_h.transpose(1, 2)).transpose(1, 2)
         clf_h = clf_h.contiguous().view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
+
         return clf_logits.view(-1, x.size(1))
 
 
 class ClfHead(nn.Module):
-    """ TODO: test this class."""
+    """Classification Head for the transformer
+
+    TODO: test this class."""
     def __init__(self, clf_token, cfg, n_class):
         super(ClfHead, self).__init__()
-        self.n_embd = clf.n_embd
+        self.n_embd = cfg.n_embd
         self.clf_token = clf_token
         self.dropout = nn.Dropout(cfg.clf_pdrop)
         self.linear = nn.Linear(cfg.n_embd, n_class)
 
-        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
 
     def forward(self, h, x):
         clf_h = h.view(-1, self.n_embd)
         flat = x[..., 0].contiguous().view(-1)
         clf_h = clf_h[flat == self.clf_token, :]
+        clf_h = self.dropout(clf_h)
         clf_logits = self.linear(clf_h)
 
         return clf_logits
