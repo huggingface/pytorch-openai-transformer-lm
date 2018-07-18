@@ -2,6 +2,7 @@ import copy
 import json
 import math
 import re
+import collections
 
 import numpy as np
 import torch
@@ -187,22 +188,23 @@ class LMHead(nn.Module):
         return lm_logits
 
 
-class ClfHead(nn.Module):
+class MultipleChoiceHead(nn.Module):
     """ Classifier Head for the transformer """
 
     def __init__(self, clf_token, cfg):
-        super(ClfHead, self).__init__()
+        super(MultipleChoiceHead, self).__init__()
         self.n_embd = cfg.n_embd
         self.clf_token = clf_token
         self.dropout = nn.Dropout2d(cfg.clf_pdrop)  # To reproduce the noise_shape parameter of TF implementation
         self.linear = nn.Linear(cfg.n_embd, 1)
-        nn.init.normal_(self.linear.weight, std=0.02)
+
+        nn.init.normal_(self.linear.weight, std = 0.02)
         nn.init.normal_(self.linear.bias, 0)
 
     def forward(self, h, x):
         # Classification logits
         clf_h = h.view(-1, self.n_embd)
-        flat = x[:, :, :, 0].contiguous().view(-1)
+        flat = x[..., 0].contiguous().view(-1)
         clf_h = clf_h[flat == self.clf_token, :]
         clf_h = clf_h.view(-1, x.size(1), self.n_embd, 1)
         # This double transposition is there to replicate the behavior
@@ -212,22 +214,90 @@ class ClfHead(nn.Module):
         clf_h = self.dropout(clf_h.transpose(1, 2)).transpose(1, 2)
         clf_h = clf_h.contiguous().view(-1, self.n_embd)
         clf_logits = self.linear(clf_h)
+
         return clf_logits.view(-1, x.size(1))
 
 
+class ClfHead(nn.Module):
+    """Classification Head for the transformer
+
+    TODO: test this class."""
+    def __init__(self, clf_token, cfg, n_class):
+        super(ClfHead, self).__init__()
+        self.n_embd = cfg.n_embd
+        self.clf_token = clf_token
+        self.dropout = nn.Dropout(cfg.clf_pdrop)
+        self.linear = nn.Linear(cfg.n_embd, n_class)
+
+        nn.init.normal_(self.linear.weight, std = 0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, h, x):
+        clf_h = h.view(-1, self.n_embd)
+        flat = x[..., 0].contiguous().view(-1)
+        clf_h = clf_h[flat == self.clf_token, :]
+        clf_h = self.dropout(clf_h)
+        clf_logits = self.linear(clf_h)
+
+        return clf_logits
+
+class SimilarityHead(nn.Module):
+    """ Similarity Head for the transformer
+
+        TODO: test this class."""
+    def __init__(self, clf_token, cfg):
+        super(SimilarityHead, self).__init__()
+        self.n_embd = cfg.n_embd
+        self.clf_token = clf_token
+        self.dropout = nn.Dropout(cfg.clf_pdrop)
+        self.linear = nn.Linear(cfg.n_embd, 1)
+
+        nn.init.normal_(self.linear.weight, std = 0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, h, x):
+        sim_h = h.view(-1, self.n_embd)
+        flat = x[..., 0].contiguous().view(-1)
+        sim_h = sim_h[flat == self.clf_token, :]
+        sim_h = self.dropout(sim_h)
+        sim_h = sim_h.sum(dim = 1)
+        sim_logits = self.linear(sim_h)
+
+        return sim_logits
+
 class DoubleHeadModel(nn.Module):
-    """ Transformer with language model and classification heads """
-    def __init__(self, cfg, clf_token, vocab=40990, n_ctx=512):
+    """ Transformer with language model and task specific heads """
+    def __init__(self, cfg, clf_token, task_head_type, vocab=40990, n_ctx=512):
         super(DoubleHeadModel, self).__init__()
         self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
         self.lm_head = LMHead(self.transformer, cfg)
-        self.clf_head = ClfHead(clf_token, cfg)
+        if isinstance(task_head_type, str):
+            if task_head_type == 'multiple_choice':
+                self.task_head = MultipleChoiceHead(clf_token, cfg)
+            elif task_head_type == 'similarity':
+                self.task_head = SimilarityHead(clf_token, cfg)
+            elif task_head_type == 'inference':
+                # the three classes correspond to entailment, contradiction and neutral.
+                self.task_head = ClfHead(clf_token, cfg, 3)
+            else:
+                raise ValueError("task_head_type is expected to be 'multiple_choice' "
+                                 "'similarity', 'inference' or ('classification', n_class) "
+                                 f"got {task_head_type}.")
+        elif isinstance(task_head_type, collections.abc.Sequence) and len(task_head_type) == 2 and \
+             task_head_type[0] == 'classification':
+            n_class = task_head_type[1]
+            self.task_head = ClfHead(clf_token, cfg, n_class)
+        else:
+            raise ValueError("task_head_type is expected to be 'multiple_choice' "
+                             "'similarity', 'inference' or ('classification', n_class) "
+                             f"got {task_head_type}.")
 
     def forward(self, x):
         h = self.transformer(x)
         lm_logits = self.lm_head(h)
-        clf_logits = self.clf_head(h, x)
-        return lm_logits, clf_logits
+        task_logits = self.task_head(h, x)
+
+        return lm_logits, task_logits
 
 
 def load_openai_pretrained_model(model, n_ctx=-1, n_special=-1, n_transfer=12, n_embd=768, path='./model/',
