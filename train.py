@@ -32,6 +32,7 @@ def transform_roc(X1, X2, X3):
         xmb[i, 1, :l13, 0] = x13
         mmb[i, 0, :l12] = 1
         mmb[i, 1, :l13] = 1
+    # Position information that is added to the input embeddings in the TransformerModel
     xmb[:, :, :, 1] = np.arange(n_vocab + n_special, n_vocab + n_special + n_ctx)
     return xmb, mmb
 
