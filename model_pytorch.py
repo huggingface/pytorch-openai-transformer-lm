@@ -84,7 +84,11 @@ class Attention(nn.Module):
         w = torch.matmul(q, k)
         if self.scale:
             w = w / math.sqrt(v.size(-1))
-        w = w * self.b + -1e9 * (1 - self.b)  # TF implem method: mask_attn_weights
+        # w = w * self.b + -1e9 * (1 - self.b)  # TF implem method: mask_attn_weights
+        # XD: self.b may be larger than w, so we need to crop it
+        b = self.b[:, :, w.size(-2), w.size(-1)]
+        w = w * b + -1e9 * (1 - b)
+
         w = nn.Softmax(dim=-1)(w)
         w = self.attn_dropout(w)
         return torch.matmul(w, v)
@@ -175,16 +179,18 @@ class TransformerModel(nn.Module):
 class LMHead(nn.Module):
     """ Language Model Head for the transformer """
 
-    def __init__(self, model, cfg):
+    def __init__(self, model, cfg, trunc_and_reshape=True):
         super(LMHead, self).__init__()
         self.n_embd = cfg.n_embd
         embed_shape = model.embed.weight.shape
         self.decoder = nn.Linear(embed_shape[1], embed_shape[0], bias=False)
         self.decoder.weight = model.embed.weight # Tied weights
+        self.trunc_and_reshape = trunc_and_reshape  # XD
 
     def forward(self, h):
         # Truncated Language modeling logits (we remove the last token)
-        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd)
+        h_trunc = h[:, :-1].contiguous().view(-1, self.n_embd) \
+            if self.trunc_and_reshape else h  # XD
         lm_logits = self.decoder(h_trunc)
         return lm_logits
 
@@ -265,6 +271,29 @@ class SimilarityHead(nn.Module):
         sim_logits = self.linear(sim_h)
 
         return sim_logits
+
+
+# XD
+class LMModel(nn.Module):
+    """ Transformer with language model head only """
+    def __init__(self, cfg, vocab=40990, n_ctx=512, return_probs=False):
+        super(LMModel, self).__init__()
+        self.transformer = TransformerModel(cfg, vocab=vocab, n_ctx=n_ctx)
+        self.lm_head = LMHead(self.transformer, cfg, trunc_and_reshape=False)
+        self.return_probs = return_probs
+        if self.return_probs:
+            pos_emb_mask = torch.zeros(1, 1, vocab)
+            pos_emb_mask[:, :, -n_ctx:] = -1e12
+            self.register_buffer('pos_emb_mask', pos_emb_mask)
+
+
+    def forward(self, x):
+        h = self.transformer(x)
+        lm_logits = self.lm_head(h)
+        if self.return_probs:
+            lm_logits = F.softmax(lm_logits + self.pos_emb_mask, dim=-1)
+        return lm_logits
+
 
 class DoubleHeadModel(nn.Module):
     """ Transformer with language model and task specific heads """
