@@ -157,8 +157,6 @@ class TransformerModel(nn.Module):
         self.drop = nn.Dropout(cfg.embd_pdrop)
         block = Block(n_ctx, cfg, scale=True)
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(cfg.n_layer)])
-        self.decoder = nn.Linear(cfg.n_embd, vocab, bias=False)
-        self.decoder.weight = self.embed.weight  # Tied weights
 
         nn.init.normal_(self.embed.weight, std=0.02)
 
