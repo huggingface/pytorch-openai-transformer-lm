@@ -86,7 +86,7 @@ class Attention(nn.Module):
             w = w / math.sqrt(v.size(-1))
         # w = w * self.b + -1e9 * (1 - self.b)  # TF implem method: mask_attn_weights
         # XD: self.b may be larger than w, so we need to crop it
-        b = self.b[:, :, w.size(-2), w.size(-1)]
+        b = self.b[:, :, :w.size(-2), :w.size(-1)]
         w = w * b + -1e9 * (1 - b)
 
         w = nn.Softmax(dim=-1)(w)

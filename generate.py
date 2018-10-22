@@ -65,6 +65,7 @@ if __name__ == '__main__':
     parser.add_argument('--e', type=float, default=1e-8)
     parser.add_argument('--n_valid', type=int, default=374)
     parser.add_argument('--gen_len', type=int, default=20)
+    parser.add_argument('--topk', type=int, default=10)
 
     args = parser.parse_args()
     print(args)
@@ -108,7 +109,11 @@ if __name__ == '__main__':
 
         for _ in range(args.gen_len):
             lm_probs = lm_model(XMB)
-            next_idx = torch.multinomial(lm_probs[:, -1, :], 1)
+            if args.topk == 0:
+                next_idx = torch.multinomial(lm_probs[:, -1, :], 1)
+            else:
+                values, indices = lm_probs[:, -1, :].topk(args.topk)
+                next_idx = indices.gather(-1, torch.multinomial(values, 1))
             next_token = text_encoder.decoder[next_idx.item()].replace('</w>', '')
             print(next_token, end=' ')
             XMB = append_batch(XMB, next_idx)
