@@ -166,7 +166,7 @@ class TransformerModel(nn.Module):
 
     def forward(self, x):
         x = x.view(-1, x.size(-2), x.size(-1))
-        e = self.embed(x)
+        e = self.drop(self.embed(x))
         # Add the position information to the input embeddings
         h = e.sum(dim=2)
         for block in self.h:
