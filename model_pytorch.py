@@ -224,9 +224,8 @@ class MultipleChoiceHead(nn.Module):
 
 
 class ClfHead(nn.Module):
-    """Classification Head for the transformer
+    """Classification Head for the transformer"""
 
-    TODO: test this class."""
     def __init__(self, clf_token, cfg, n_class):
         super(ClfHead, self).__init__()
         self.n_embd = cfg.n_embd
@@ -247,9 +246,8 @@ class ClfHead(nn.Module):
         return clf_logits
 
 class SimilarityHead(nn.Module):
-    """ Similarity Head for the transformer
+    """ Similarity Head for the transformer"""
 
-        TODO: test this class."""
     def __init__(self, clf_token, cfg):
         super(SimilarityHead, self).__init__()
         self.n_embd = cfg.n_embd
@@ -264,9 +262,11 @@ class SimilarityHead(nn.Module):
         sim_h = h.view(-1, self.n_embd)
         flat = x[..., 0].contiguous().view(-1)
         sim_h = sim_h[flat == self.clf_token, :]
-        sim_h = self.dropout(sim_h)
-        sim_h = sim_h.sum(dim = 1)
+        #addition of the two different sequence representations 
+        sim_h=sim_h[[range(0,sim_h.shape[0],2)],:]+sim_h[[range(1,sim_h.shape[0],2)],:]
+        sim_h=torch.squeeze(sim_h,dim=0)
         sim_logits = self.linear(sim_h)
+        sim_logits=torch.squeeze(sim_logits,dim=1)
 
         return sim_logits
 
